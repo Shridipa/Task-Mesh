@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]" httpx pytest-cov
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test with coverage
+        env:
+          WORKER_SECRET: ci-test-secret
+          CORS_ORIGINS: "http://localhost:5173"
+        run: pytest --cov=taskmesh --cov-report=term-missing --cov-fail-under=60
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t taskmesh/api:${{ github.sha }} .
+
+      - name: Smoke-test container health
+        run: |
+          docker run -d --name taskmesh-smoke \
+            -e DATABASE_URL=sqlite+aiosqlite:///tmp/test.db \
+            -e WORKER_SECRET=smoke-secret \
+            -e CORS_ORIGINS="*" \
+            -p 8000:8000 \
+            --entrypoint uvicorn \
+            taskmesh/api:${{ github.sha }} \
+            taskmesh.main:app --host 0.0.0.0 --port 8000
+          sleep 3
+          curl -f http://localhost:8000/health
+          docker stop taskmesh-smoke

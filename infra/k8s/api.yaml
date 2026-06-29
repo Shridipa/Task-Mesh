@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskmesh-api
+  labels:
+    app: taskmesh-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: taskmesh-api
+  template:
+    metadata:
+      labels:
+        app: taskmesh-api
+    spec:
+      containers:
+        - name: api
+          image: taskmesh/api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: REDIS_URL
+              value: redis://taskmesh-redis:6379/0
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: taskmesh-db
+                  key: url
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskmesh-api
+spec:
+  selector:
+    app: taskmesh-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+

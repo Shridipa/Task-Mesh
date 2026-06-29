@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskmesh-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskmesh-scheduler
+  template:
+    metadata:
+      labels:
+        app: taskmesh-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: taskmesh/api:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "taskmesh.scheduler"]
+          env:
+            - name: REDIS_URL
+              value: redis://taskmesh-redis:6379/0
+

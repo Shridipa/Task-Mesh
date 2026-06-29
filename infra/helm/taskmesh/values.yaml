@@ -1,0 +1,17 @@
+image:
+  repository: taskmesh/api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+api:
+  replicas: 2
+
+workers:
+  replicas: 3
+  minReplicas: 3
+  maxReplicas: 20
+  cpuTarget: 65
+
+redis:
+  url: redis://taskmesh-redis:6379/0
+
