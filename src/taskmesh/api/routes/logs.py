@@ -1,4 +1,5 @@
 """Logs endpoint — returns recent events formatted as log entries."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -20,7 +21,7 @@ async def get_logs(
     _: str = Depends(require_read),
 ):
     """Get recent log entries (events formatted as logs).
-    
+
     Supports filtering by event_type and job_id.
     Poll this endpoint for live log updates.
     """
@@ -30,7 +31,7 @@ async def get_logs(
         limit=limit,
         offset=offset,
     )
-    
+
     # Format events as log entries
     logs = []
     for event in events:
@@ -40,16 +41,18 @@ async def get_logs(
             time_str = created.split("T")[1][:8] if "T" in created else created[:8]
         else:
             time_str = str(created)[:8]
-        
-        logs.append({
-            "timestamp": time_str,
-            "level": _event_to_level(event.get("event_type", "")),
-            "source": "engine",
-            "job_id": event.get("job_id"),
-            "message": event.get("message", ""),
-            "event_type": event.get("event_type"),
-        })
-    
+
+        logs.append(
+            {
+                "timestamp": time_str,
+                "level": _event_to_level(event.get("event_type", "")),
+                "source": "engine",
+                "job_id": event.get("job_id"),
+                "message": event.get("message", ""),
+                "event_type": event.get("event_type"),
+            }
+        )
+
     return logs
 
 

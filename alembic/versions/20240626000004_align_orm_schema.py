@@ -46,7 +46,12 @@ def upgrade() -> None:
         sa.Column("memory_usage", sa.Float, nullable=False, server_default="0.0"),
         sa.Column("active_jobs", sa.Integer, nullable=False, server_default="0"),
         sa.Column("status", sa.String(50), nullable=False, server_default="active"),
-        sa.Column("last_heartbeat", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "last_heartbeat",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
     )
 
     # -------------------------------------------------------------------------
@@ -70,7 +75,9 @@ def upgrade() -> None:
 
     # Fix timezone on datetime columns
     for col in ("created_at", "execute_at", "started_at", "completed_at"):
-        op.execute(f"ALTER TABLE jobs ALTER COLUMN {col} TYPE TIMESTAMPTZ USING {col} AT TIME ZONE 'UTC'")
+        op.execute(
+            f"ALTER TABLE jobs ALTER COLUMN {col} TYPE TIMESTAMPTZ USING {col} AT TIME ZONE 'UTC'"
+        )
 
     # -------------------------------------------------------------------------
     # Events table: convert id to UUID, fix FK, add missing columns
@@ -78,20 +85,30 @@ def upgrade() -> None:
     op.execute("ALTER TABLE events ALTER COLUMN id DROP DEFAULT")
     op.execute("ALTER TABLE events ALTER COLUMN id TYPE UUID USING gen_random_uuid()")
     op.execute("ALTER TABLE events ALTER COLUMN id SET DEFAULT gen_random_uuid()")
-    op.add_column("events", sa.Column("tenant_id", sa.String(80), nullable=False, server_default="default"))
+    op.add_column(
+        "events", sa.Column("tenant_id", sa.String(80), nullable=False, server_default="default")
+    )
     op.add_column("events", sa.Column("message", sa.Text, nullable=False, server_default=""))
-    op.execute("ALTER TABLE events ALTER COLUMN timestamp TYPE TIMESTAMPTZ USING timestamp AT TIME ZONE 'UTC'")
+    op.execute(
+        "ALTER TABLE events ALTER COLUMN timestamp TYPE TIMESTAMPTZ USING timestamp AT TIME ZONE 'UTC'"
+    )
     op.alter_column("events", "timestamp", new_column_name="created_at")
     # Re-add FK after id type change
-    op.create_foreign_key("fk_events_job_id", "events", "jobs", ["job_id"], ["id"], ondelete="CASCADE")
+    op.create_foreign_key(
+        "fk_events_job_id", "events", "jobs", ["job_id"], ["id"], ondelete="CASCADE"
+    )
 
     # -------------------------------------------------------------------------
     # Unique constraint for idempotency
     # -------------------------------------------------------------------------
-    op.create_unique_constraint("uq_jobs_tenant_idempotency", "jobs", ["tenant_id", "idempotency_key"])
+    op.create_unique_constraint(
+        "uq_jobs_tenant_idempotency", "jobs", ["tenant_id", "idempotency_key"]
+    )
 
     # Fix workers last_heartbeat timezone
-    op.execute("ALTER TABLE workers ALTER COLUMN last_heartbeat TYPE TIMESTAMPTZ USING last_heartbeat AT TIME ZONE 'UTC'")
+    op.execute(
+        "ALTER TABLE workers ALTER COLUMN last_heartbeat TYPE TIMESTAMPTZ USING last_heartbeat AT TIME ZONE 'UTC'"
+    )
 
 
 def downgrade() -> None:
@@ -103,32 +120,40 @@ def downgrade() -> None:
     op.execute("ALTER TABLE events ADD COLUMN id SERIAL PRIMARY KEY")
     op.execute("ALTER TABLE events DROP COLUMN job_id")
     op.execute("ALTER TABLE events ADD COLUMN job_id INTEGER")
-    
+
     op.execute("ALTER TABLE jobs DROP COLUMN id CASCADE")
     op.execute("ALTER TABLE jobs ADD COLUMN id SERIAL PRIMARY KEY")
-    
-    op.create_foreign_key("events_job_id_fkey", "events", "jobs", ["job_id"], ["id"], ondelete="CASCADE")
-    
+
+    op.create_foreign_key(
+        "events_job_id_fkey", "events", "jobs", ["job_id"], ["id"], ondelete="CASCADE"
+    )
+
     op.drop_column("jobs", "history")
-    
+
     op.drop_constraint("fk_jobs_worker_id", "jobs", type_="foreignkey")
     op.drop_column("jobs", "worker_id")
     op.add_column("jobs", sa.Column("worker_id", sa.Integer, nullable=True))
-    
+
     op.drop_table("workers")
     op.create_table(
         "workers",
         sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column("last_heartbeat", sa.DateTime, nullable=True)
+        sa.Column("last_heartbeat", sa.DateTime, nullable=True),
     )
-    op.create_foreign_key("fk_jobs_worker_id", "jobs", "workers", ["worker_id"], ["id"], ondelete="SET NULL")
-    
+    op.create_foreign_key(
+        "fk_jobs_worker_id", "jobs", "workers", ["worker_id"], ["id"], ondelete="SET NULL"
+    )
+
     for col in ("created_at", "execute_at", "started_at", "completed_at"):
-        op.execute(f"ALTER TABLE jobs ALTER COLUMN {col} TYPE TIMESTAMP WITHOUT TIME ZONE USING {col} AT TIME ZONE 'UTC'")
-        
+        op.execute(
+            f"ALTER TABLE jobs ALTER COLUMN {col} TYPE TIMESTAMP WITHOUT TIME ZONE USING {col} AT TIME ZONE 'UTC'"
+        )
+
     op.drop_column("events", "tenant_id")
     op.drop_column("events", "message")
-    op.execute("ALTER TABLE events ALTER COLUMN created_at TYPE TIMESTAMP WITHOUT TIME ZONE USING created_at AT TIME ZONE 'UTC'")
+    op.execute(
+        "ALTER TABLE events ALTER COLUMN created_at TYPE TIMESTAMP WITHOUT TIME ZONE USING created_at AT TIME ZONE 'UTC'"
+    )
     op.alter_column("events", "created_at", new_column_name="timestamp")
-    
+
     op.drop_constraint("uq_jobs_tenant_idempotency", "jobs", type_="unique")

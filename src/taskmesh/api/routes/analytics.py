@@ -1,4 +1,5 @@
 """Analytics endpoints — time-series data for charts."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,7 +18,7 @@ async def analytics_time_series(
     _: str = Depends(require_read),
 ):
     """Return time-series job data for analytics charts.
-    
+
     Groups jobs by hour for the last N hours, broken down by status.
     """
     return await engine.analytics_time_series(hours=hours)

@@ -2,15 +2,13 @@
 import os
 from typing import AsyncGenerator
 from ..db import Base
-from ..db import models   # noqa: F401
-from fastapi import Depends
+from ..db import models  # noqa: F401
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase
 
 # ----------------------------------------------------------------------
 # Database
@@ -25,10 +23,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 # Always create an AsyncEngine
 engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 
+
 # ---- **NEW**: create tables if they do not exist ----
 # Import the Base that all ORM models inherit from and run the sync
 # metadata creation inside an async context.
-from ..db import Base  # <-- this pulls in taskmesh.db.__init__ (Base)
 # The import also registers all models (Job, Worker, Event) because
 # `taskmesh.db.models` imports them at module import time.
 # If you have lazy imports elsewhere, you can also do:
@@ -41,6 +39,8 @@ async def create_schema():
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
 # ----------------------------------------------------------------------
 
 # Session factory – works with the AsyncEngine above
@@ -64,6 +64,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Yield an async session for each request."""
     async with AsyncSessionLocal() as session:
         yield session
+
 
 async def get_redis() -> AsyncGenerator[Redis, None]:
     """Yield a Redis client."""

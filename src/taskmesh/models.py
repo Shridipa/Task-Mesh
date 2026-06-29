@@ -27,6 +27,7 @@ class Role(StrEnum):
     DEVELOPER = "developer"
     VIEWER = "viewer"
 
+
 class JobCreate(BaseModel):
     job_type: str = Field(min_length=1, max_length=80)
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -35,6 +36,7 @@ class JobCreate(BaseModel):
     execute_at: datetime | None = None
     max_retries: int = Field(default=5, ge=0, le=20)
     idempotency_key: str | None = Field(default=None, max_length=120)
+
 
 class Job(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -96,4 +98,3 @@ class Metrics(BaseModel):
     active_workers: int
     throughput_per_minute: int
     retry_rate: float
-

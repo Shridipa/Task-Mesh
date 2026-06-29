@@ -5,6 +5,7 @@ Uses Redis distributed locking for single-active-scheduler semantics when Redis 
 Falls back to simple polling without locking when Redis is unavailable.
 Implements lease expiry, heartbeat, and crash recovery.
 """
+
 from __future__ import annotations
 
 import asyncio

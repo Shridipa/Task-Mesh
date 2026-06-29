@@ -10,7 +10,6 @@ from typing import Any
 import redis.asyncio as redis
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError, OperationalError
 
 from .api.dependencies import engine as db_engine
 from .db.models import Job as OrmJob, Worker as OrmWorker, Event as OrmEvent
@@ -43,6 +42,7 @@ def _orm_to_dict(obj: Any) -> dict[str, Any]:
 
 class RateLimiter:
     """Redis-based sliding-window rate limiter."""
+
     def __init__(self, limit: int = 100, window_seconds: int = 60) -> None:
         self.limit = limit
         self.window = window_seconds
@@ -140,7 +140,9 @@ class TaskMeshEngine:
                         return _orm_to_dict(existing)
 
                 status = (
-                    JobStatus.SCHEDULED if self._is_future(request.execute_at) else JobStatus.PENDING
+                    JobStatus.SCHEDULED
+                    if self._is_future(request.execute_at)
+                    else JobStatus.PENDING
                 )
                 job_id = str(uuid.uuid4())
                 job = OrmJob(
@@ -190,7 +192,9 @@ class TaskMeshEngine:
                 return None
             return _orm_to_dict(job)
 
-    async def lease_next_job(self, worker_id: str, tenant_id: str | None = None) -> dict[str, Any] | None:
+    async def lease_next_job(
+        self, worker_id: str, tenant_id: str | None = None
+    ) -> dict[str, Any] | None:
         """Lease the next pending job for a worker.
 
         Uses FOR UPDATE SKIP LOCKED on PostgreSQL for safe concurrent access.
@@ -252,7 +256,11 @@ class TaskMeshEngine:
                 job.history = job.history + [f"{utc_now().isoformat()} JobStarted by {worker_id}"]
 
                 await self._emit(
-                    session, "JobStarted", str(job.id), job.tenant_id, f"{worker_id} leased job {job.id}"
+                    session,
+                    "JobStarted",
+                    str(job.id),
+                    job.tenant_id,
+                    f"{worker_id} leased job {job.id}",
                 )
                 await session.flush()
                 await session.refresh(job)
@@ -320,10 +328,12 @@ class TaskMeshEngine:
                     message = f"Job {job.id} moved to DLQ after {job.retry_count} attempts"
                 else:
                     job.status = JobStatus.SCHEDULED.value
-                    backoff_seconds = min(2 ** job.retry_count, 300)
+                    backoff_seconds = min(2**job.retry_count, 300)
                     job.execute_at = utc_now() + timedelta(seconds=backoff_seconds)
                     event_type = "JobRetryScheduled"
-                    message = f"Job {job.id} retry {job.retry_count} scheduled in {backoff_seconds}s"
+                    message = (
+                        f"Job {job.id} retry {job.retry_count} scheduled in {backoff_seconds}s"
+                    )
 
                 job.history = job.history + [f"{utc_now().isoformat()} {event_type}: {reason}"]
                 await self._emit(session, event_type, str(job.id), job.tenant_id, message)
@@ -351,7 +361,11 @@ class TaskMeshEngine:
                 job.history = job.history + [f"{utc_now().isoformat()} JobReplayed"]
 
                 await self._emit(
-                    session, "JobReplayed", str(job.id), job.tenant_id, f"Job {job.id} replayed from DLQ"
+                    session,
+                    "JobReplayed",
+                    str(job.id),
+                    job.tenant_id,
+                    f"Job {job.id} replayed from DLQ",
                 )
                 await session.flush()
                 await session.refresh(job)
@@ -410,7 +424,9 @@ class TaskMeshEngine:
 
             total_jobs = sum(counts.values()) or 1
             completed = counts.get(JobStatus.COMPLETED.value, 0)
-            failedish = counts.get(JobStatus.FAILED.value, 0) + counts.get(JobStatus.DEAD_LETTER.value, 0)
+            failedish = counts.get(JobStatus.FAILED.value, 0) + counts.get(
+                JobStatus.DEAD_LETTER.value, 0
+            )
             total_done = completed + failedish
 
             return Metrics(
@@ -425,19 +441,28 @@ class TaskMeshEngine:
                 retry_rate=round(retry_jobs / total_jobs, 3),
             )
 
-    async def lease_job_by_id(self, job_id: str, worker_id: str | None = None) -> dict[str, Any] | None:
+    async def lease_job_by_id(
+        self, job_id: str, worker_id: str | None = None
+    ) -> dict[str, Any] | None:
         """Lease a specific job by ID (used by worker /jobs/{id}/lease endpoint)."""
         async with AsyncSession(db_engine) as session:
             async with session.begin():
                 job = await session.get(OrmJob, job_id)
-                if not job or job.status not in (JobStatus.PENDING.value, JobStatus.SCHEDULED.value):
+                if not job or job.status not in (
+                    JobStatus.PENDING.value,
+                    JobStatus.SCHEDULED.value,
+                ):
                     return None
                 job.status = JobStatus.RUNNING.value
                 job.worker_id = worker_id or "unknown"
                 job.started_at = utc_now()
                 job.history = job.history + [f"{utc_now().isoformat()} JobLeased"]
                 await self._emit(
-                    session, "JobLeased", str(job.id), job.tenant_id, f"Job {job.id} leased by {worker_id}"
+                    session,
+                    "JobLeased",
+                    str(job.id),
+                    job.tenant_id,
+                    f"Job {job.id} leased by {worker_id}",
                 )
                 await session.flush()
                 await session.refresh(job)
@@ -526,12 +551,12 @@ class TaskMeshEngine:
 
     async def analytics_time_series(self, hours: int = 24) -> list[dict[str, Any]]:
         """Return time-series data for analytics charts.
-        
+
         Groups jobs by hour for the last N hours, broken down by status.
         Works with both PostgreSQL and SQLite.
         """
-        from sqlalchemy import func as sa_func, extract, cast, Date
-        
+        from sqlalchemy import func as sa_func
+
         since = utc_now() - timedelta(hours=hours)
         async with AsyncSession(db_engine) as session:
             # For simplicity, use the created_at field grouped by hour
@@ -548,7 +573,7 @@ class TaskMeshEngine:
             )
             result = await session.execute(stmt)
             rows = result.all()
-            
+
             # Aggregate into hourly buckets
             hourly: dict[str, dict[str, int]] = {}
             for row in rows:
@@ -579,7 +604,7 @@ class TaskMeshEngine:
                 elif status == JobStatus.DEAD_LETTER.value:
                     hourly[hour_key]["dead_letter"] += count
                 hourly[hour_key]["created"] += count
-            
+
             return list(hourly.values())
 
     async def duplicate_job(self, job_id: str) -> dict[str, Any]:
@@ -591,9 +616,10 @@ class TaskMeshEngine:
             job = await session.get(OrmJob, str(uid))
             if not job:
                 raise KeyError(job_id)
-            
+
             # Create a new job from the existing one
             from .models import JobCreate
+
             new_request = JobCreate(
                 job_type=job.job_type,
                 payload=job.payload,

@@ -1,10 +1,11 @@
 """Scheduler control endpoints — pause, resume, status, and manual execution."""
+
 from __future__ import annotations
 
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from ...engine import engine
 from ..auth import require_admin

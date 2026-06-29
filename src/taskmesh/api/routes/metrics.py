@@ -1,4 +1,5 @@
 """Metrics endpoints — real data and Prometheus output."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends

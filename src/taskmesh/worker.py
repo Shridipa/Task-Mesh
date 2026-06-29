@@ -4,6 +4,7 @@ Leases and executes jobs from the PostgreSQL/SQLite-backed engine.
 Uses asyncio for non-blocking operation and proper async engine calls.
 Registers heartbeat on startup and continuously polls for pending jobs.
 """
+
 from __future__ import annotations
 
 import asyncio

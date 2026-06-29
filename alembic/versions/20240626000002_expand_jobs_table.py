@@ -14,13 +14,17 @@ down_revision = "20240626000001"
 branch_labels = None
 depends_on = None
 
+
 def upgrade() -> None:
     # Rename column "type" to "job_type"
     op.alter_column("jobs", "type", new_column_name="job_type")
     # Drop the unused updated_at column
     op.drop_column("jobs", "updated_at")
     # Add new columns
-    op.add_column("jobs", sa.Column("tenant_id", sa.String(length=80), nullable=False, server_default="default"))
+    op.add_column(
+        "jobs",
+        sa.Column("tenant_id", sa.String(length=80), nullable=False, server_default="default"),
+    )
     op.add_column("jobs", sa.Column("priority", sa.Integer, nullable=False, server_default="5"))
     op.add_column("jobs", sa.Column("retry_count", sa.Integer, nullable=False, server_default="0"))
     op.add_column("jobs", sa.Column("max_retries", sa.Integer, nullable=False, server_default="5"))
@@ -34,6 +38,7 @@ def upgrade() -> None:
     op.create_foreign_key(
         "fk_jobs_worker_id", "jobs", "workers", ["worker_id"], ["id"], ondelete="SET NULL"
     )
+
 
 def downgrade() -> None:
     # Revert foreign key

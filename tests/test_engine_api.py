@@ -1,4 +1,5 @@
 """Integration tests for the TaskMesh FastAPI HTTP API and TaskMeshEngine."""
+
 from __future__ import annotations
 
 import os
@@ -16,7 +17,13 @@ ADMIN_HEADERS = {"X-Role": "admin"}
 DEV_HEADERS = {"X-Role": "developer"}
 VIEWER_HEADERS = {"X-Role": "viewer"}
 
-SAMPLE_JOB = {"job_type": "email", "payload": {"to": "user@example.com"}, "priority": 5, "tenant_id": "test_tenant"}
+SAMPLE_JOB = {
+    "job_type": "email",
+    "payload": {"to": "user@example.com"},
+    "priority": 5,
+    "tenant_id": "test_tenant",
+}
+
 
 @pytest.fixture()
 def client():
@@ -29,6 +36,7 @@ def client():
 
     try:
         import psycopg2
+
         conn = psycopg2.connect(sync_url)
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -39,6 +47,7 @@ def client():
 
     try:
         import redis as redis_sync
+
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
         r = redis_sync.from_url(redis_url)
         r.flushdb()
@@ -49,6 +58,7 @@ def client():
     try:
         from sqlalchemy import create_engine
         from taskmesh.db import Base
+
         if db_url.startswith("sqlite"):
             sync_create_url = db_url.replace("sqlite+aiosqlite:///", "sqlite:///")
             eng = create_engine(sync_create_url)
@@ -60,6 +70,7 @@ def client():
     with TestClient(app) as c:
         yield c
 
+
 @pytest.mark.asyncio
 async def test_create_job(client: TestClient):
     """Test job creation via POST /jobs/."""
@@ -70,4 +81,4 @@ async def test_create_job(client: TestClient):
     assert isinstance(job_data["id"], str)
     assert job_data["job_type"] == SAMPLE_JOB["job_type"]
     assert job_data["tenant_id"] == SAMPLE_JOB["tenant_id"]
-    assert job_data["status"] == "pending" # Initial status for a non-scheduled job
+    assert job_data["status"] == "pending"  # Initial status for a non-scheduled job

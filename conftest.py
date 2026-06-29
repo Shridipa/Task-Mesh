@@ -1,4 +1,5 @@
 """Root conftest.py — sets environment variables and test config before any module is imported."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +8,9 @@ import sys
 
 # Must be set BEFORE any taskmesh/backend modules are imported so that the
 # module-level engine initialisation picks up the right URLs.
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://taskmesh:taskmesh_secret@localhost:5432/taskmesh")
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+asyncpg://taskmesh:taskmesh_secret@localhost:5432/taskmesh"
+)
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("WORKER_SECRET", "taskmesh_secret")
 
@@ -27,4 +30,3 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     # Ensure anyio only uses asyncio, never trio.
     os.environ.setdefault("ANYIO_BACKEND", "asyncio")
-

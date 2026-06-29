@@ -1,4 +1,5 @@
 """Dashboard endpoints — real metrics from the engine."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter

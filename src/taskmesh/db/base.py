@@ -9,4 +9,5 @@ class Base(DeclarativeBase):
     """Base class for all ORM models.
     Used by Alembic for migrations and by the application for metadata.
     """
+
     pass

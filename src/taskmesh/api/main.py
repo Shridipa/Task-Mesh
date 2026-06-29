@@ -16,13 +16,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from .auth import (
-    require_admin,
-    require_read,
-    require_worker,
     require_worker_token as _require_worker_token,
 )
 from .dependencies import create_schema
-from .routes import analytics, dashboard, demo, events, jobs, logs, metrics, scheduler_control, workers
+from .routes import (
+    analytics,
+    dashboard,
+    demo,
+    events,
+    jobs,
+    logs,
+    metrics,
+    scheduler_control,
+    workers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +59,8 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.error(f"{name} terminated unexpectedly: {exc}", exc_info=True)
 
-    scheduler_task = asyncio.create_task(
-        _run_with_logging("scheduler", scheduler_main())
-    )
-    worker_task = asyncio.create_task(
-        _run_with_logging("worker", worker_main())
-    )
+    scheduler_task = asyncio.create_task(_run_with_logging("scheduler", scheduler_main()))
+    worker_task = asyncio.create_task(_run_with_logging("worker", worker_main()))
     app.state.scheduler_task = scheduler_task
     app.state.worker_task = worker_task
     try:
@@ -68,7 +71,6 @@ async def lifespan(app: FastAPI):
         worker_task.cancel()
         await asyncio.gather(scheduler_task, worker_task, return_exceptions=True)
         logger.info("Background tasks shut down")
-
 
 
 # ---------------------------------------------------------------------------

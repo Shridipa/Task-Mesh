@@ -3,6 +3,7 @@
 Uses TaskMeshEngine for all operations (no in-memory fallback).
 All job IDs are UUID strings.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 
 from ...engine import engine
-from ...models import JobCreate, JobStatus, Metrics
+from ...models import JobCreate
 from ..dependencies import get_db, get_redis
 from ..auth import require_write, require_read, require_admin, require_worker, require_worker_token
 
@@ -103,7 +104,9 @@ async def replay_job(
     return await engine.replay_dead_letter(job_id)
 
 
-@router.post("/{job_id}/duplicate", status_code=status.HTTP_201_CREATED, response_model=dict[str, Any])
+@router.post(
+    "/{job_id}/duplicate", status_code=status.HTTP_201_CREATED, response_model=dict[str, Any]
+)
 async def duplicate_job(
     job_id: str,
     _: str = Depends(require_write),

@@ -1,4 +1,5 @@
 """Integration tests for the TaskMesh FastAPI HTTP API."""
+
 from __future__ import annotations
 
 import os
@@ -29,6 +30,7 @@ def client():
 
     try:
         import psycopg2
+
         conn = psycopg2.connect(sync_url)
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -39,6 +41,7 @@ def client():
 
     try:
         import redis as redis_sync
+
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
         r = redis_sync.from_url(redis_url)
         r.flushdb()
@@ -49,6 +52,7 @@ def client():
     try:
         from sqlalchemy import create_engine
         from taskmesh.db import Base
+
         if db_url.startswith("sqlite"):
             sync_create_url = db_url.replace("sqlite+aiosqlite:///", "sqlite:///")
             eng = create_engine(sync_create_url)
@@ -60,10 +64,10 @@ def client():
     with TestClient(app) as c:
         yield c
 
+
 @pytest.mark.asyncio
 async def test_health_check(client: TestClient):
     """Test the /health endpoint returns a successful response."""
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-

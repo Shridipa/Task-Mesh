@@ -10,8 +10,6 @@ from datetime import datetime
 from typing import List
 
 from sqlalchemy import (
-    Boolean,
-    Column,
     DateTime,
     Enum as SAEnum,
     Float,
@@ -21,15 +19,17 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
-from ..models import JobStatus, Role
+from ..models import JobStatus
 
 
 def utc_now() -> datetime:
     return datetime.utcnow()
 
+
 from .base import Base
+
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -40,14 +40,14 @@ class Job(Base):
     tenant_id: Mapped[str] = mapped_column(String, nullable=False, default="default")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     status: Mapped[JobStatus] = mapped_column(
-    SAEnum(
-        JobStatus,
-        values_callable=lambda enum: [e.value for e in enum],
-        native_enum=False,
-    ),
-    nullable=False,
-    default=JobStatus.PENDING,
-)
+        SAEnum(
+            JobStatus,
+            values_callable=lambda enum: [e.value for e in enum],
+            native_enum=False,
+        ),
+        nullable=False,
+        default=JobStatus.PENDING,
+    )
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -59,6 +59,7 @@ class Job(Base):
     worker_id: Mapped[str | None] = mapped_column(String, nullable=True)
     history: Mapped[List[str]] = mapped_column(JSON, default=list)
 
+
 class Worker(Base):
     __tablename__ = "workers"
 
@@ -68,7 +69,10 @@ class Worker(Base):
     memory_usage: Mapped[float] = mapped_column(Float, nullable=False)
     active_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
-    last_heartbeat: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_heartbeat: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
 
 class Event(Base):
     __tablename__ = "events"

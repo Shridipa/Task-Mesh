@@ -33,6 +33,7 @@ sys_path_added = False
 if "PYTHONPATH" not in os.environ:
     # Ensure the repository root is on the path when alembic runs.
     import sys
+
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     sys_path_added = True
 
@@ -44,6 +45,7 @@ target_metadata = Base.metadata
 # ----------------------------------------------------------------------
 # other configuration settings
 # ----------------------------------------------------------------------
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -79,14 +81,15 @@ def run_migrations_online() -> None:
         raise RuntimeError("DATABASE_URL not set for Alembic migrations")
 
     from sqlalchemy import create_engine
-    connectable = create_engine(sync_url, poolclass=pool.NullPool)
 
+    connectable = create_engine(sync_url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
+
 
 if context.is_offline_mode():
     run_migrations_offline()

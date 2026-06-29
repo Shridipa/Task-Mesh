@@ -14,6 +14,7 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
+
 def upgrade() -> None:
     op.create_table(
         "jobs",
@@ -22,7 +23,9 @@ def upgrade() -> None:
         sa.Column("payload", sa.JSON, nullable=False),
         sa.Column("status", sa.String(50), nullable=False, server_default="pending"),
         sa.Column("created_at", sa.DateTime, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime, server_default=sa.text("now()"), onupdate=sa.text("now()")),
+        sa.Column(
+            "updated_at", sa.DateTime, server_default=sa.text("now()"), onupdate=sa.text("now()")
+        ),
     )
     op.create_table(
         "workers",
@@ -44,6 +47,7 @@ def upgrade() -> None:
         sa.Column("value", sa.Float, nullable=False),
         sa.Column("recorded_at", sa.DateTime, server_default=sa.text("now()")),
     )
+
 
 def downgrade() -> None:
     op.drop_table("metrics")
