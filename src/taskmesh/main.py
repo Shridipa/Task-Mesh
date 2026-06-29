@@ -1,6 +1,6 @@
 """Compatibility wrapper for legacy imports.
 
-The original codebase exposed a FastAPI app via ``taskmesh.main``. After refactoring
-into the layered ``taskmesh.api`` package we keep this thin wrapper so existing
-imports (including the test suite) continue to work without modification.
+Provides the FastAPI ``app`` instance expected at ``taskmesh.main``.
 """
+
+from .api.main import app  # re-export FastAPI application for backward compatibility
