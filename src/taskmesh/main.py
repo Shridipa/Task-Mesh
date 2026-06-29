@@ -3,4 +3,4 @@
 Provides the FastAPI ``app`` instance expected at ``taskmesh.main``.
 """
 
-from .api.main import app  # re-export FastAPI application for backward compatibility
+from .api.main import app  # re-export FastAPI application for backward compatibility  # noqa: F401

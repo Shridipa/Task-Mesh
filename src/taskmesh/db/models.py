@@ -24,11 +24,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 from ..models import JobStatus
 
 
+from .base import Base
+
+
 def utc_now() -> datetime:
     return datetime.utcnow()
-
-
-from .base import Base
 
 
 class Job(Base):
