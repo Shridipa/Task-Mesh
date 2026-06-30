@@ -1,10 +1,8 @@
-import asyncio
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
 
 import pytest
-from taskmesh.engine import TaskMeshEngine, redis_client as real_redis
+from taskmesh.engine import TaskMeshEngine
 from taskmesh.models import JobCreate, JobStatus
 from taskmesh.db.dependencies import create_schema
 
