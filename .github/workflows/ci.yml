@@ -44,7 +44,7 @@ jobs:
         run: |
           docker run -d --name taskmesh-smoke \
             --network host \
-            -e DATABASE_URL=sqlite+aiosqlite:///tmp/test.db \
+            -e DATABASE_URL=sqlite+aiosqlite:////tmp/test.db \
             -e REDIS_URL=redis://localhost:6379/0 \
             -e WORKER_SECRET=smoke-secret \
             -e CORS_ORIGINS="*" \
