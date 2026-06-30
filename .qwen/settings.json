@@ -43,7 +43,8 @@
       "Bash(echo *)",
       "Bash(git push *)",
       "Bash(ruff *)",
-      "Bash(coverage *)"
+      "Bash(coverage *)",
+      "Bash(git rm *)"
     ]
   },
   "$version": 4
