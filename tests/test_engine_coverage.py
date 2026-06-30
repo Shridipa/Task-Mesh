@@ -1,10 +1,10 @@
 import os
 import uuid
-
+import pytest_asyncio
 import pytest
 from taskmesh.engine import TaskMeshEngine
 from taskmesh.models import JobCreate, JobStatus
-from taskmesh.db.dependencies import create_schema
+from taskmesh.api.dependencies import create_schema
 
 # Use a dummy redis that records published messages
 class DummyRedis:
@@ -24,7 +24,7 @@ class DummyRedis:
 
 dummy_redis = DummyRedis()
 
-@pytest.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def setup_db(tmp_path, monkeypatch):
     # Ensure SQLite DB file in a temp directory
     os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{tmp_path}/test.db"
@@ -47,7 +47,7 @@ async def test_create_job_and_fetch():
     created = await engine.create_job(job_req)
     assert created["job_type"] == "email"
     assert created["tenant_id"] == "test"
-    assert created["status"] == JobStatus.PENDING.value
+    assert created["status"] == JobStatus.PENDING
     # Retrieve same job
     fetched = await engine.get_job(created["id"])
     assert fetched == created

@@ -1,7 +1,16 @@
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
-from src.taskmesh.api.main import app
+from taskmesh.api.main import app
+from taskmesh.api.auth import (
+    require_write,
+    require_read,
+    require_admin,
+    require_worker,
+    require_worker_token,
+)
+from taskmesh.engine import engine as real_engine
+
 
 # Mock engine functions
 class MockEngine:
@@ -39,44 +48,69 @@ class MockEngine:
     async def delete_job(self, job_id):
         return None
 
+
 mock_engine = MockEngine()
 
-# Override the engine dependency used in routes
-app.dependency_overrides["src.taskmesh.engine.engine"] = lambda: mock_engine
+
+@pytest.fixture(autouse=True)
+def patch_engine(monkeypatch):
+    """Patch the engine singleton's methods in-place, since routes call
+    `engine.create_job(...)` directly rather than via Depends()."""
+    for name in (
+        "create_job",
+        "list_jobs",
+        "get_job",
+        "lease_job_by_id",
+        "complete_job",
+        "fail_job",
+        "replay_dead_letter",
+        "duplicate_job",
+        "cancel_job",
+        "delete_job",
+    ):
+        monkeypatch.setattr(real_engine, name, getattr(mock_engine, name))
+
+
+# Bypass auth for these tests — override every auth dependency used by the routes
+app.dependency_overrides[require_write] = lambda: "test-user"
+app.dependency_overrides[require_read] = lambda: "test-user"
+app.dependency_overrides[require_admin] = lambda: "test-user"
+app.dependency_overrides[require_worker] = lambda: "test-worker"
+app.dependency_overrides[require_worker_token] = lambda: "test-token"
+
 
 @pytest.mark.asyncio
 async def test_create_and_get_job():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
-        # create job
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/jobs/", json={"job_type": "test", "payload": {}, "priority": 1})
         assert resp.status_code == 201
         data = resp.json()
         assert data["id"] == "1234"
-        # get job
         resp = await ac.get(f"/jobs/{data['id']}")
         assert resp.status_code == 200
         assert resp.json()["status"] == "pending"
 
+
 @pytest.mark.asyncio
 async def test_get_missing_job():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get("/jobs/not-found")
         assert resp.status_code == 404
 
+
 @pytest.mark.asyncio
 async def test_lease_and_complete_job():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
-        # lease job
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/jobs/1234/lease")
         assert resp.status_code == 200
         assert resp.json()["status"] == "leased"
-        # complete job
         resp = await ac.post("/jobs/1234/complete")
         assert resp.status_code == 204
 
+
 @pytest.mark.asyncio
 async def test_fail_and_replay_job():
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/jobs/1234/fail", params={"reason": "error"})
         assert resp.status_code == 200
         assert resp.json()["failed"] is True
