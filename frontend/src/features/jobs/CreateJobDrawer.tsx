@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select } from "@/components/ui/select";
 import { createJob } from "@/api/jobs";
 import type { JobCreateInput } from "@/types/taskmesh";
 
@@ -36,10 +35,6 @@ export function CreateJobDrawer({ open, onClose }: CreateJobDrawerProps) {
 
   const update = (patch: Partial<JobCreateInput>) => {
     setForm((prev) => ({ ...prev, ...patch }));
-  };
-
-  const updatePayload = (patch: Record<string, unknown>) => {
-    setForm((prev) => ({ ...prev, payload: { ...prev.payload, ...patch } }));
   };
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {

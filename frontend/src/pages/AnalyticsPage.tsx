@@ -24,7 +24,7 @@ export function AnalyticsPage() {
   }
 
   if (metrics.isError || timeSeries.isError) {
-    return <ErrorState message={(metrics.error || timeSeries.error).message} onRetry={() => { metrics.refetch(); timeSeries.refetch(); }} />;
+    return <ErrorState message={(metrics.error ?? timeSeries.error)?.message ?? "Unable to load analytics"} onRetry={() => { metrics.refetch(); timeSeries.refetch(); }} />;
   }
 
   const m = metrics.data;

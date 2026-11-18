@@ -49,6 +49,7 @@ class Job(BaseModel):
     retry_count: int = 0
     max_retries: int = 5
     failure_reason: str | None = None
+    result: dict[str, Any] | None = None
     idempotency_key: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     execute_at: datetime | None = None

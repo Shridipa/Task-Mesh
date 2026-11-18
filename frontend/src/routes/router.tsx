@@ -13,6 +13,7 @@ const AnalyticsPage = lazy(() => import("@/pages/AnalyticsPage").then((module) =
 const EventsPage = lazy(() => import("@/pages/EventsPage").then((module) => ({ default: module.EventsPage })));
 const LogsPage = lazy(() => import("@/pages/LogsPage").then((module) => ({ default: module.LogsPage })));
 const ProfilePage = lazy(() => import("@/pages/ProfilePage").then((module) => ({ default: module.ProfilePage })));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const NotFoundPage = lazy(() => import("@/pages/NotFoundPage").then((module) => ({ default: module.NotFoundPage })));
 
 function RouteFallback() {
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: "/events", element: withSuspense(<EventsPage />) },
       { path: "/logs", element: withSuspense(<LogsPage />) },
       { path: "/profile", element: withSuspense(<ProfilePage />) },
+      { path: "/settings", element: withSuspense(<SettingsPage />) },
       { path: "*", element: withSuspense(<NotFoundPage />) }
     ]
   }

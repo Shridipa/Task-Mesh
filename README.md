@@ -1,392 +1,281 @@
-# 🚀 TaskMesh – A Distributed Task Queue & Workflow Orchestration Platform
+# TaskMesh
 
-## Overview
+TaskMesh is a background task processing platform. Instead of making a user wait
+while work is performed inside the request, it stores the work as a **job** in a
+queue and lets **background workers** execute it independently.
 
-TaskMesh is a modern distributed task processing platform designed to execute long-running, asynchronous, and scheduled tasks efficiently. It separates task submission from task execution, allowing applications to remain responsive while background workers process jobs independently.
-
-Instead of executing expensive operations directly inside an application request, TaskMesh places them into a queue where dedicated workers process them asynchronously. This architecture improves scalability, reliability, and fault tolerance while providing complete visibility into every task through an interactive monitoring dashboard.
-
-The project demonstrates concepts used in production-grade distributed systems such as Celery, RabbitMQ workers, Temporal, Apache Airflow, AWS SQS, Google Cloud Tasks, and Kubernetes Job Controllers, while remaining lightweight and educational.
-
----
-
-# ❓ Why Build TaskMesh?
-
-Modern applications frequently perform operations that should not block users.
-
-Examples include:
-
-* Sending emails
-* Processing uploaded files
-* Generating reports
-* Image or video processing
-* AI inference
-* Running machine learning pipelines
-* Payment processing
-* Data synchronization
-* Scheduled reminders
-* Backup operations
-
-If these operations execute synchronously, users must wait until they complete, resulting in poor performance and an unreliable user experience.
-
-TaskMesh solves this problem by decoupling task execution from user requests.
-
-Instead of performing work immediately, applications submit jobs into TaskMesh, which schedules and executes them independently using background workers.
+The repository ships one working workload — **text processing** — so you can see
+the whole pipeline move: submit → queue → worker → result → stored → displayed.
 
 ---
 
-# 💡 The Problem
+## 1. What TaskMesh does
 
-Imagine an e-commerce platform.
+- Accepts a task from a user and stores it as a job with a status.
+- Hands that job to a background worker when one is free.
+- Lets the worker execute the task and save the output.
+- Retries failed jobs with exponential backoff, and moves exhausted jobs to a
+  dead-letter queue.
+- Shows the real state of every job, worker and queue in a web console.
 
-A customer places an order.
+## 2. Why background processing is useful
 
-Without a task queue:
+Sending email, generating reports, processing uploads or cleaning up data should
+never block a page request. A queue decouples "accept the work" from "do the
+work", so the API answers in milliseconds while a worker does the slow part. It
+also gives you retries, scheduling, and an audit trail for free.
+
+## 3. How the system works
 
 ```
-User
- │
- ▼
-Place Order
- │
- ├── Update Database
- ├── Generate Invoice
- ├── Send Email
- ├── Notify Warehouse
- ├── Update Inventory
- └── Generate Analytics
+Visitor
+  │  POST /text/jobs  { "text": "..." }
+  ▼
+FastAPI API ──────────► creates a job (status = pending) in the database
+  │
+  ▼
+Scheduler (1s loop) ──► promotes scheduled jobs whose time has come
+  │
+  ▼
+Worker (poll loop) ───► leases the job (status = running, worker_id, started_at)
+  │
+  ▼
+text.process handler ─► computes word/character/sentence/line counts + cleaned text
+  │
+  ▼
+Engine ───────────────► stores result JSON, status = completed, completed_at
+  │
+  ▼
+GET /text/jobs/{id} ──► the console polls until the job is finished, then shows
+                        the stored result
 ```
 
-The customer must wait until every operation finishes.
-
-If one service is slow or unavailable, the entire request becomes slow or fails.
-
----
-
-# ✅ The TaskMesh Solution
-
-With TaskMesh:
-
-```
-User
- │
- ▼
-Submit Order
- │
- ▼
-TaskMesh API
- │
- ▼
-Job Queue
- │
- ├─────────────┐
- ▼             ▼
-Worker A    Worker B
- │             │
- ▼             ▼
-Send Email   Generate Invoice
- │             │
- ▼             ▼
-Complete     Complete
-```
-
-The API immediately acknowledges the request while workers process tasks independently in the background.
-
-The result is:
-
-* Faster response times
-* Higher throughput
-* Better scalability
-* Easier failure recovery
-* Retry support
-* Improved reliability
-
----
-
-# 🏗 System Architecture
-
-TaskMesh consists of several independent components that work together.
-
-### 1. API Server
-
-The FastAPI backend exposes REST endpoints for:
-
-* Creating jobs
-* Viewing jobs
-* Managing workers
-* Monitoring metrics
-* Viewing events
-* Scheduling tasks
-
-The API validates incoming requests before storing them in the database.
-
----
-
-### 2. Job Queue
-
-Every submitted task becomes a Job.
-
-Each job contains:
-
-* Job ID
-* Task Type
-* Payload
-* Priority
-* Status
-* Retry Count
-* Execution Time
-* Tenant Information
-
-Jobs move through a lifecycle until completion.
-
----
-
-### 3. Scheduler
-
-The scheduler continuously checks for delayed or scheduled jobs.
-
-If a job's execution time has arrived, it moves the job into the execution queue where workers can process it.
-
----
-
-### 4. Workers
-
-Workers are independent background processes responsible for executing tasks.
-
-Each worker:
-
-* Polls pending jobs
-* Claims a task
-* Executes business logic
-* Updates status
-* Records execution events
-* Reports metrics
-
-Multiple workers can run simultaneously to increase throughput.
-
----
-
-### 5. Database
-
-TaskMesh stores persistent system state including:
-
-* Jobs
-* Workers
-* Events
-* Retry history
-* Execution timestamps
-
-This ensures that jobs survive application restarts and can be audited later.
-
----
-
-### 6. Redis (Optional)
-
-Redis enables:
-
-* Distributed locking
-* Event streaming
-* Pub/Sub messaging
-* Worker coordination
-
-The project also supports running without Redis using SQLite for local development.
-
----
-
-### 7. Monitoring Dashboard
-
-The React dashboard provides visibility into the entire system.
-
-It allows operators to observe:
-
-* Queue depth
-* Running jobs
-* Failed jobs
-* Worker status
-* Retry statistics
-* Historical events
-* System health
-
-The dashboard acts as the control center for the distributed platform.
-
----
-
-# 🔄 Job Lifecycle
-
-Every task progresses through several states.
-
-```
-Create Job
-      │
-      ▼
-Pending
-      │
-      ▼
-Scheduled
-      │
-      ▼
-Running
-      │
-      ▼
-Completed
-```
-
-If execution fails:
-
-```
-Running
-    │
-    ▼
-Retry
-    │
-    ▼
-Retry
-    │
-    ▼
-Failed
-    │
-    ▼
-Dead Letter Queue
-```
-
-This lifecycle allows TaskMesh to recover automatically from transient failures while preventing permanently failing jobs from blocking the system.
-
----
-
-# 🌍 Real-World Applications
-
-TaskMesh can power many types of systems, including:
-
-* Email delivery platforms
-* Notification services
-* AI inference pipelines
-* ETL and data processing workflows
-* Image and video processing
-* Background API integrations
-* Document generation
-* Financial transaction processing
-* Report generation
-* Scheduled maintenance jobs
-* IoT event processing
-* Cloud automation pipelines
-
----
-
-# 🎯 Benefits
-
-TaskMesh provides several advantages over synchronous processing.
-
-### Faster Applications
-
-Users receive responses immediately while background tasks execute independently.
-
----
-
-### Scalability
-
-Additional workers can be started to process larger workloads without changing application code.
-
----
-
-### Fault Tolerance
-
-Failed jobs are retried automatically before eventually moving to a Dead Letter Queue.
-
----
-
-### Observability
-
-Every job is traceable through metrics, events, and monitoring dashboards.
-
----
-
-### Reliability
-
-Task execution survives temporary failures and application restarts.
-
----
-
-### Extensibility
-
-New job types and worker implementations can be added without modifying the existing architecture.
-
----
-
-# 🧠 Concepts Demonstrated
-
-TaskMesh showcases several important software engineering concepts:
-
-* Distributed Systems
-* Asynchronous Programming
-* Background Task Processing
-* REST API Design
-* Worker Pools
-* Task Scheduling
-* Event-Driven Architecture
-* Database Transactions
-* Monitoring & Observability
-* Retry Strategies
-* Fault Recovery
-* Docker Deployment
-* Kubernetes Orchestration
-* Queue Management
-* System Scalability
-
----
-🚀 Getting Started
-1. Clone Repository
-git clone https://github.com/yourusername/taskmesh.git
-
-cd taskmesh
-2. Create Virtual Environment
-
-Windows
-
+Nothing is simulated: the numbers come from the worker's handler, and they are
+read back from the database afterwards.
+
+## 4. The text-processing demo
+
+`text.process` computes these values **from the cleaned text**:
+
+| Value | Rule |
+| --- | --- |
+| Words | whitespace-separated tokens |
+| Characters | every character of the cleaned text, spaces and newlines included |
+| Sentences | segments separated by `.`, `!` or `?` (empty segments ignored, so trailing punctuation does not add a sentence) |
+| Lines | lines separated by `\n` |
+
+Cleaning: `\r\n`/`\r` become `\n`, runs of spaces/tabs collapse to one space,
+each line is trimmed, runs of 3+ newlines collapse to one blank line, and the
+whole text is trimmed. Input must be 1–10,000 characters and is only ever
+processed as text — never executed as code.
+
+Counting is deterministic: the same input always produces the same result.
+
+## 5. API
+
+Public demo routes (no credentials, per-client rate limited):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/text/jobs` | Submit `{"text": "..."}`; returns the created job |
+| `GET` | `/text/jobs/{job_id}` | Status of that text job, including `result` once completed |
+
+Administrative and monitoring routes (header-based roles):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Liveness probe |
+| `GET` | `/dashboard/metrics` | Job counts, active workers, retry rate |
+| `POST` | `/jobs/` | Create a job (admin/developer) |
+| `GET` | `/jobs/` | List jobs, filter by `status`/`tenant_id` (any role) |
+| `GET` | `/jobs/{id}` | Read one job (any role) |
+| `POST` | `/jobs/{id}/lease` | Worker leases a job |
+| `POST` | `/jobs/{id}/complete` | Worker marks a job done |
+| `POST` | `/jobs/{id}/fail` | Worker reports a failure (retry/DLQ) |
+| `POST` | `/jobs/{id}/replay` | Replay a dead-letter job (admin) |
+| `POST` | `/jobs/{id}/cancel` | Cancel a pending job (admin) |
+| `GET` | `/workers/` | Registered workers |
+| `GET` | `/events/` | Job lifecycle events |
+| `GET` | `/metrics/summary` | Metrics as JSON |
+| `GET` | `/metrics/prometheus` | Prometheus exposition format |
+| `GET`/`POST` | `/scheduler/*` | Scheduler status, pause/resume, run-now |
+| `GET` | `/analytics/timeseries` | Hourly job counts |
+
+Access is self-asserted through headers (`X-Role: admin|developer|viewer`), and
+worker-only routes additionally require `X-Worker-Token`. The public `/text`
+routes need no header so a visitor can try the demo. Interactive docs live at
+`/docs`.
+
+## 6. What the scheduler does
+
+`src/taskmesh/scheduler.py` runs every second. It promotes `scheduled` jobs whose
+`execute_at` has passed to `pending`, and marks workers inactive when their
+heartbeat is older than a minute. With Redis available it takes a distributed
+lock (`scheduler_lock`, `SET NX EX 5`) so only one scheduler acts at a time;
+without Redis it runs in single-process mode.
+
+## 7. What a worker does
+
+`src/taskmesh/worker.py` sends a heartbeat (so it appears in the console), then
+leases the highest-priority pending job, runs the handler registered for its job
+type (`src/taskmesh/tasks.py`), and stores either the result
+(`engine.complete_job(job_id, result)`) or the error (`engine.fail_job`). Failures
+are retried with backoff `min(2**retry_count, 300)` seconds up to `max_retries`,
+then dead-lettered. A job type with no handler fails with
+`no handler is registered for job type '...'`.
+
+The API process starts a scheduler and a worker in its lifespan, so a single
+`uvicorn` process is already a working system. You can also run a worker as its
+own process to add capacity.
+
+## 8. Running the backend
+
+```bash
 python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 
-.venv\Scripts\activate
+uvicorn taskmesh.main:app --reload --port 8000
+```
 
-Linux/Mac
+- API: http://localhost:8000
+- Swagger UI: http://localhost:8000/docs
+- Health: `curl http://localhost:8000/health`
 
-python3 -m venv .venv
+With no `DATABASE_URL` the app uses SQLite (`./test.db`) and creates its tables
+on startup. Alembic migrations live in `alembic/` (`alembic upgrade head`).
 
+## 9. Running an extra worker
+
+```bash
 source .venv/bin/activate
-3. Install Dependencies
-pip install -r requirements.txt
-4. Run Backend
-python -m uvicorn taskmesh.main:app --reload
+python -m taskmesh.worker
+```
 
-Backend runs at
+Set `WORKER_ID` to give it a readable name. Workers need the same
+`DATABASE_URL` as the API.
 
-http://127.0.0.1:8000
-5. Run Frontend
+## 10. Running the frontend
+
+```bash
 cd frontend
-
 npm install
-
 npm run dev
+```
 
-Frontend runs at
+Open http://localhost:5173. Vite proxies `/api` to `http://127.0.0.1:8000`, so
+keep the backend running. Use `VITE_API_BASE_URL` to point at a different API.
 
-http://localhost:5173
-📘 API Documentation
+## 11. Required environment variables and services
 
-Swagger UI
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./test.db` | `postgresql+asyncpg://user:pass@host/db` for PostgreSQL |
+| `REDIS_URL` | `redis://localhost:6379/0` | Optional: distributed scheduler lock and rate limiting |
+| `WORKER_SECRET` | `taskmesh_secret` | Token for worker-only routes — change it in production |
+| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `WORKER_ID` | hostname | Name shown for the worker |
+| `VITE_API_BASE_URL` | `/api` | Frontend API base URL |
 
-http://127.0.0.1:8000/docs
+Redis is optional; without it the scheduler runs without the distributed lock
+and the rate limiter allows requests. PostgreSQL is optional; the demo runs on
+SQLite out of the box. `docker-compose.yml` provides API, Redis, PostgreSQL,
+Prometheus and Grafana if you want the full stack.
 
-ReDoc
+## 12. Submitting a text-processing task
 
-http://127.0.0.1:8000/redoc
+From the website: open the dashboard, paste text into **Try TaskMesh Yourself**
+and press **Submit task**. The panel shows the real job ID, the real status
+changes and the worker's result.
 
----
+From the command line:
 
-# 🎓 Learning Objectives
+```bash
+curl -s -X POST http://localhost:8000/text/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Hello world. TaskMesh runs this in the background!"}'
 
-This project was built to explore how modern distributed task processing systems operate internally.
+# → {"id":"<job-id>","job_type":"text.process","status":"pending", ...}
+```
 
-Rather than relying on an existing framework like Celery, TaskMesh demonstrates how core components—including task queues, schedulers, workers, monitoring, retries, persistence, and orchestration—can be designed and implemented from the ground up using FastAPI, SQLAlchemy, Redis, and React.
+## 13. Verifying that the worker actually executed it
 
-It serves both as a practical engineering project and as a learning platform for distributed computing concepts used in production cloud-native systems.
-"# Task-Mesh"  
-#
+```bash
+curl -s http://localhost:8000/text/jobs/<job-id>
+```
+
+A finished job looks like this — `worker_id`, both timestamps and `result` are
+written by the worker, not by the API:
+
+```json
+{
+  "id": "<job-id>",
+  "job_type": "text.process",
+  "status": "completed",
+  "worker_id": "your-hostname",
+  "created_at": "2024-06-26T10:00:00Z",
+  "started_at": "2024-06-26T10:00:01Z",
+  "completed_at": "2024-06-26T10:00:01Z",
+  "result": {
+    "words": 8,
+    "characters": 57,
+    "sentences": 2,
+    "lines": 1,
+    "cleaned_text": "Hello world. TaskMesh runs this in the background!"
+  }
+}
+```
+
+The same data is visible in the console under **Jobs** (and the lifecycle events
+under **Events**). You can also inspect the database directly:
+
+```bash
+sqlite3 test.db "select id, status, worker_id, result from jobs order by created_at desc limit 5;"
+```
+
+If no worker is running, the job honestly stays `pending` — the console shows
+"Waiting in queue" with no invented progress.
+
+## 14. Tests
+
+```bash
+pip install -e ".[dev]"
+pytest                                  # backend, includes the end-to-end worker test
+ruff check .                            # lint
+
+cd frontend
+npm run lint
+npm run build                           # TypeScript + production build
+npm test                                # component test
+```
+
+`tests/test_text_demo.py` covers the counting rules (including Unicode and
+whitespace normalization), input validation, result persistence, the retry path
+and a real submit → worker → completed → read-back cycle.
+
+## 15. Project layout
+
+```
+src/taskmesh/
+  text_processing.py     the demo workload (counting rules)
+  tasks.py               job_type → handler dispatch used by workers
+  worker.py              heartbeat, lease, execute, complete/fail
+  scheduler.py           due-job promotion, worker expiry, Redis lock
+  engine.py              single source of truth for jobs, workers, events
+  db/models.py           SQLAlchemy ORM (jobs include a nullable result JSON)
+  api/routes/text.py     public submission + status endpoints
+  api/routes/*.py        jobs, workers, metrics, events, logs, analytics, scheduler
+frontend/src/
+  pages/OverviewPage.tsx        explanation, live stats, flow, demo
+  features/text/TextDemo.tsx    submission form, lifecycle, result
+alembic/versions/              schema migrations (latest: job result column)
+```
+
+## 16. Known limitations
+
+- Access control is header-based (`X-Role`), not authenticated users — see the
+  TODO in `src/taskmesh/api/auth.py`.
+- When `DATABASE_URL` points at PostgreSQL the API currently falls back to a
+  local SQLite file, so the one-day demo runs on SQLite. Redis is optional.
+- Only `text.process` has a handler. Any other job type fails honestly through
+  the retry/dead-letter path instead of pretending to succeed.

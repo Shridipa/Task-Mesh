@@ -22,12 +22,12 @@ from .dependencies import create_schema
 from .routes import (
     analytics,
     dashboard,
-    demo,
     events,
     jobs,
     logs,
     metrics,
     scheduler_control,
+    text,
     workers,
 )
 
@@ -108,7 +108,7 @@ app.include_router(dashboard.router, prefix="", tags=["dashboard"])
 app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(scheduler_control.router, prefix="/scheduler", tags=["scheduler"])
 app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
-app.include_router(demo.router, prefix="/demo", tags=["demo"])
+app.include_router(text.router, prefix="/text", tags=["text"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
 
 

@@ -19,6 +19,7 @@ export interface Job {
   retry_count: number;
   max_retries: number;
   failure_reason: string | null;
+  result: Record<string, unknown> | null;
   idempotency_key: string | null;
   created_at: string;
   execute_at: string | null;
@@ -27,6 +28,16 @@ export interface Job {
   worker_id: string | null;
   history: string[];
 }
+
+export interface TextProcessResult {
+  words: number;
+  characters: number;
+  sentences: number;
+  lines: number;
+  cleaned_text: string;
+}
+
+export type TextJob = Omit<Job, "result"> & { result: TextProcessResult | null };
 
 export interface JobCreateInput {
   job_type: string;

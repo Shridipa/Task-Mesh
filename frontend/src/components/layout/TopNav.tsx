@@ -1,11 +1,9 @@
-import { useState } from "react";
-import { Menu, Search, Zap } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 import { useLocation } from "react-router";
 import { Button } from "@/components/ui/button";
 import { supportedRoles } from "@/api/auth";
 import { useAuthStore } from "@/store/auth-store";
 import { useUiStore } from "@/store/ui-store";
-import { generateDemoWorkers, generateDemoJobs } from "@/api/demo";
 import type { UserRole } from "@/types/taskmesh";
 
 function titleFromPath(pathname: string): string {
@@ -24,19 +22,6 @@ export function TopNav() {
   const role = useAuthStore((state) => state.role);
   const setRole = useAuthStore((state) => state.setRole);
   const setCommandOpen = useUiStore((state) => state.setCommandOpen);
-  const [demoLoading, setDemoLoading] = useState(false);
-
-  const runDemo = async () => {
-    setDemoLoading(true);
-    try {
-      await generateDemoWorkers(3);
-      await generateDemoJobs(15);
-    } catch (error) {
-      console.error("Demo generation failed:", error);
-    } finally {
-      setDemoLoading(false);
-    }
-  };
 
   return (
     <header className="flex h-14 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur">
@@ -53,10 +38,6 @@ export function TopNav() {
         <Button variant="secondary" onClick={() => setCommandOpen(true)}>
           <Search className="h-4 w-4" />
           <span className="hidden sm:inline">Ctrl+K</span>
-        </Button>
-        <Button variant="primary" onClick={runDemo} disabled={demoLoading}>
-          <Zap className="h-4 w-4" />
-          <span className="hidden sm:inline">{demoLoading ? "Generating..." : "Demo"}</span>
         </Button>
         <label className="sr-only" htmlFor="role-select">
           Role

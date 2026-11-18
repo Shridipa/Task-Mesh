@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Pause, Play, SquarePen, RotateCcw } from "lucide-react";
+import { Pause, Play, RotateCcw } from "lucide-react";
 import { getSchedulerStatus, pauseScheduler, resumeScheduler, runSchedulerNow } from "@/api/scheduler";
 import { listJobs } from "@/api/jobs";
 import { Button } from "@/components/ui/button";

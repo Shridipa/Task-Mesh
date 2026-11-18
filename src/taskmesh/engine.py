@@ -29,6 +29,11 @@ def _safe_uuid(value: str) -> uuid.UUID | None:
         return None
 
 
+def _status_value(status: Any) -> Any:
+    """Normalize a status read from the ORM (which may be a JobStatus member)."""
+    return status.value if isinstance(status, JobStatus) else status
+
+
 def _orm_to_dict(obj: Any) -> dict[str, Any]:
     """Convert an ORM instance to a plain dict.
 
@@ -266,7 +271,9 @@ class TaskMeshEngine:
                 await session.refresh(job)
                 return _orm_to_dict(job)
 
-    async def complete_job(self, job_id: str) -> dict[str, Any]:
+    async def complete_job(
+        self, job_id: str, result: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
@@ -280,10 +287,11 @@ class TaskMeshEngine:
                         .values(
                             status=JobStatus.COMPLETED.value,
                             completed_at=utc_now(),
+                            result=result,
                         )
                     )
-                    result = await session.execute(stmt)
-                    if result.rowcount == 0:
+                    update_result = await session.execute(stmt)
+                    if update_result.rowcount == 0:
                         raise KeyError(job_id)
                     job = await session.get(OrmJob, str(uid))
                 else:
@@ -293,6 +301,7 @@ class TaskMeshEngine:
 
                     job.status = JobStatus.COMPLETED.value
                     job.completed_at = utc_now()
+                    job.result = result
 
                 job.history = job.history + [f"{utc_now().isoformat()} JobCompleted"]
 
@@ -350,7 +359,7 @@ class TaskMeshEngine:
                 job = await session.get(OrmJob, str(uid))
                 if not job:
                     raise KeyError(job_id)
-                if job.status != JobStatus.DEAD_LETTER.value:
+                if _status_value(job.status) != JobStatus.DEAD_LETTER.value:
                     raise ValueError("job_not_in_dead_letter")
 
                 job.status = JobStatus.PENDING.value
@@ -448,7 +457,7 @@ class TaskMeshEngine:
         async with AsyncSession(db_engine) as session:
             async with session.begin():
                 job = await session.get(OrmJob, job_id)
-                if not job or job.status not in (
+                if not job or _status_value(job.status) not in (
                     JobStatus.PENDING.value,
                     JobStatus.SCHEDULED.value,
                 ):
@@ -538,7 +547,10 @@ class TaskMeshEngine:
                 job = await session.get(OrmJob, str(uid))
                 if not job:
                     raise KeyError(job_id)
-                if job.status not in (JobStatus.PENDING.value, JobStatus.SCHEDULED.value):
+                if _status_value(job.status) not in (
+                    JobStatus.PENDING.value,
+                    JobStatus.SCHEDULED.value,
+                ):
                     raise ValueError("Only pending or scheduled jobs can be cancelled")
                 job.status = JobStatus.CANCELED.value
                 job.history = job.history + [f"{utc_now().isoformat()} JobCancelled"]

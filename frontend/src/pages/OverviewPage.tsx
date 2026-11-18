@@ -1,134 +1,121 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, CheckCircle2, Clock, Cpu, Database, Gauge, Server } from "lucide-react";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import type { ComponentType } from "react";
+import { ArrowRight, CheckCircle2, Clock, Cpu } from "lucide-react";
 import { getDashboardMetrics } from "@/api/metrics";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { compactNumber, percentage, timeAgo } from "@/utils/format";
+import { TextDemo } from "@/features/text/TextDemo";
 
-function RecentEvents() {
-  const { data: events, isLoading, isError } = useQuery({
-    queryKey: ["recent-events"],
-    queryFn: () => import("@/api/events").then((m) => m.listEvents({ limit: 10 })),
-    refetchInterval: 10_000,
-  });
-
-  if (isLoading) return <Skeleton className="h-48" />;
-  if (isError) return null;
-
-  return (
-    <Card>
-      <CardHeader><CardTitle>Recent Events</CardTitle></CardHeader>
-      <CardContent>
-        {events && events.length > 0 ? (
-          <div className="space-y-2">
-            {events.map((event) => (
-              <div key={event.id} className="flex items-start gap-3 text-sm">
-                <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary/60" />
-                <div className="min-w-0 flex-1">
-                  <span className="font-medium">{event.event_type}</span>
-                  <span className="ml-2 text-muted-foreground">{event.message}</span>
-                  <div className="text-xs text-muted-foreground">{timeAgo(event.created_at)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-sm text-muted-foreground">No recent events.</div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+const FLOW = [
+  { title: "Submit a task", detail: "The visitor sends text to the API." },
+  { title: "Task enters the queue", detail: "The job is stored with status pending." },
+  { title: "A worker picks it up", detail: "A background worker leases the job." },
+  { title: "The worker executes it", detail: "The handler processes the text." },
+  { title: "The result is saved", detail: "The output is stored and shown here." }
+];
 
 export function OverviewPage() {
   const metrics = useQuery({
     queryKey: ["dashboard-metrics"],
     queryFn: getDashboardMetrics,
-    refetchInterval: 10_000
+    refetchInterval: 5_000
   });
 
-  if (metrics.isLoading) {
-    return <Skeleton className="h-[620px]" />;
-  }
-
-  if (metrics.isError) {
-    return <ErrorState message={metrics.error.message} onRetry={() => void metrics.refetch()} />;
-  }
-
-  const data = metrics.data;
-  if (!data) {
-    return <Skeleton className="h-[620px]" />;
-  }
-  const total = data.pending + data.scheduled + data.running + data.completed + data.failed + data.dead_letter;
-  const successRate = total ? data.completed / total : 0;
-  const queueData = [
-    { name: "Pending", value: data.pending },
-    { name: "Scheduled", value: data.scheduled },
-    { name: "Running", value: data.running },
-    { name: "Completed", value: data.completed },
-    { name: "Failed", value: data.failed },
-    { name: "DLQ", value: data.dead_letter }
-  ];
-  const statCards = [
-    ["Cluster Health", data.dead_letter > 0 ? "Degraded" : "Healthy", Gauge],
-    ["Pending Jobs", compactNumber(data.pending), Clock],
-    ["Running Jobs", compactNumber(data.running), Activity],
-    ["Completed Jobs", compactNumber(data.completed), CheckCircle2],
-    ["Failed Jobs", compactNumber(data.failed + data.dead_letter), AlertTriangle],
-    ["Throughput", `${data.throughput_per_minute}/min`, Database],
-    ["Retries", percentage(data.retry_rate), Server],
-    ["Worker Count", compactNumber(data.active_workers), Cpu]
-  ];
+  const waiting = (metrics.data?.pending ?? 0) + (metrics.data?.scheduled ?? 0);
+  const loading = metrics.isLoading;
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {statCards.map(([label, value, Icon]) => (
-          <Card key={label as string}>
-            <CardContent className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-muted-foreground">{label as string}</div>
-                <div className="mt-2 text-2xl font-semibold">{value as string}</div>
-              </div>
-              <Icon className="h-5 w-5 text-muted-foreground" />
-            </CardContent>
-          </Card>
-        ))}
+      <Card>
+        <CardContent className="space-y-3 p-6">
+          <h2 className="text-2xl font-semibold">Background tasks, processed by real workers</h2>
+          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+            TaskMesh is a background task processing platform. Instead of making a user wait while work is performed,
+            it places the work in a queue so that background workers can execute it independently.
+          </p>
+          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+            A worker is a background process that picks tasks from the queue and performs the actual work. The text
+            task below is executed by a real worker in this deployment, and the result is stored in the database.
+          </p>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard label="Tasks waiting" hint="queued for a worker" value={loading ? null : waiting} icon={Clock} />
+        <StatCard
+          label="Tasks running"
+          hint="being processed right now"
+          value={loading ? null : metrics.data?.running ?? 0}
+          icon={Cpu}
+        />
+        <StatCard
+          label="Tasks completed"
+          hint="finished successfully"
+          value={loading ? null : metrics.data?.completed ?? 0}
+          icon={CheckCircle2}
+        />
       </div>
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Card>
-          <CardHeader><CardTitle>Queue Throughput</CardTitle></CardHeader>
-          <CardContent className="h-80">
-            <ResponsiveContainer>
-              <BarChart data={queueData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" />
-                <YAxis stroke="hsl(var(--muted-foreground))" />
-                <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
-                <Bar dataKey="value" fill="hsl(var(--primary))" radius={[8, 8, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Task Success Rate</CardTitle></CardHeader>
-          <CardContent className="h-80">
-            <ResponsiveContainer>
-              <AreaChart data={[{ name: "Current", success: Math.round(successRate * 100), retry: Math.round(data.retry_rate * 100) }]}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" />
-                <YAxis stroke="hsl(var(--muted-foreground))" />
-                <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
-                <Area type="monotone" dataKey="success" stroke="hsl(var(--success))" fill="hsl(var(--success))" fillOpacity={0.2} />
-                <Area type="monotone" dataKey="retry" stroke="hsl(var(--warning))" fill="hsl(var(--warning))" fillOpacity={0.2} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </div>
-      <RecentEvents />
+      {metrics.isError ? (
+        <p className="text-sm text-destructive" role="alert">
+          Live statistics are unavailable: {metrics.error.message}
+        </p>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>What happens when a task is submitted?</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ol className="grid gap-3 md:grid-cols-5">
+            {FLOW.map((step, index) => (
+              <li key={step.title} className="rounded-xl border border-border bg-muted/40 p-3">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[11px] font-semibold text-primary">
+                    {index + 1}
+                  </span>
+                  {index < FLOW.length - 1 ? <ArrowRight className="ml-auto h-3.5 w-3.5" /> : null}
+                </div>
+                <div className="mt-2 text-sm font-medium">{step.title}</div>
+                <p className="mt-1 text-xs text-muted-foreground">{step.detail}</p>
+              </li>
+            ))}
+          </ol>
+        </CardContent>
+      </Card>
+
+      <TextDemo />
+
+      <p className="text-xs text-muted-foreground">
+        Detailed monitoring is available in the sidebar: Jobs, Workers, Scheduler, Dead Letter Queue, Analytics, Events
+        and Logs.
+      </p>
     </div>
+  );
+}
+
+function StatCard({
+  label,
+  hint,
+  value,
+  icon: Icon
+}: {
+  label: string;
+  hint: string;
+  value: number | null;
+  icon: ComponentType<{ className?: string }>;
+}) {
+  return (
+    <Card>
+      <CardContent className="flex items-center justify-between">
+        <div>
+          <div className="text-xs text-muted-foreground">{label}</div>
+          <div className="mt-2 text-2xl font-semibold">
+            {value === null ? <Skeleton className="h-7 w-12" /> : value.toLocaleString()}
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
+        </div>
+        <Icon className="h-5 w-5 text-muted-foreground" />
+      </CardContent>
+    </Card>
   );
 }

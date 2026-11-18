@@ -37,6 +37,7 @@ class Job(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     job_type: Mapped[str] = mapped_column(String, nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     tenant_id: Mapped[str] = mapped_column(String, nullable=False, default="default")
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     status: Mapped[JobStatus] = mapped_column(
