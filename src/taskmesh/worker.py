@@ -49,9 +49,13 @@ async def main() -> None:
             # Track the job for error recovery
             _current_job_id = str(job["id"])
 
-            # Execute job (simulated work)
+            # Execute job. Demo jobs deliberately take longer so a visitor can
+            # observe the real pending -> running -> completed lifecycle.
             logger.info(f"Worker {worker_id} executing job {_current_job_id}")
-            await asyncio.sleep(random.uniform(0.05, 0.25))
+            if job.get("job_type") == "demo.process":
+                await asyncio.sleep(2.5)
+            else:
+                await asyncio.sleep(random.uniform(0.05, 0.25))
 
             # Mark job as completed
             await engine.complete_job(_current_job_id)
