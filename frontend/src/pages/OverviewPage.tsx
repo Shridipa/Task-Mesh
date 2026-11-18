@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Activity, AlertTriangle, ArrowRight, CheckCircle2, Clock3, Layers3, Play, RefreshCw, Server } from "lucide-react";
 import { Link } from "react-router";
 import { getDashboardMetrics } from "@/api/metrics";
 import { listJobs } from "@/api/jobs";
 import { listEvents } from "@/api/events";
-import { generateDemoJobs, generateDemoWorkers } from "@/api/demo";
+import { runLiveDemo } from "@/api/demo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState } from "@/components/ui/error-state";
@@ -40,14 +41,15 @@ function JobRow({ job }: { job: Job }) {
 
 export function OverviewPage() {
   const queryClient = useQueryClient();
+  const [demoJobId, setDemoJobId] = useState<string | null>(null);
   const metrics = useQuery({
     queryKey: ["dashboard-metrics"],
     queryFn: getDashboardMetrics,
-    refetchInterval: 10_000
+    refetchInterval: 2_000
   });
   const jobs = useQuery({
     queryKey: ["jobs", "overview"],
-    queryFn: () => listJobs({ limit: 5 }),
+    queryFn: () => listJobs({ limit: 100 }),
     refetchInterval: 10_000
   });
   const events = useQuery({
@@ -55,22 +57,20 @@ export function OverviewPage() {
     queryFn: () => listEvents({ limit: 5 }),
     refetchInterval: 10_000
   });
-  const sampleData = useMutation({
-    mutationFn: async () => {
-      await generateDemoWorkers(3);
-      await generateDemoJobs(15);
-    },
-    onSuccess: async () => {
+  const liveDemo = useMutation({
+    mutationFn: () => runLiveDemo(1),
+    onSuccess: async (result) => {
+      setDemoJobId(result.created[0]?.id ?? null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] }),
         queryClient.invalidateQueries({ queryKey: ["jobs"] }),
-        queryClient.invalidateQueries({ queryKey: ["recent-events"] }),
-        queryClient.invalidateQueries({ queryKey: ["workers"] })
+        queryClient.invalidateQueries({ queryKey: ["recent-events"] })
       ]);
     }
   });
+  const demoJob = jobs.data?.find((job) => job.id === demoJobId);
 
-  if (metrics.isLoading) return <Skeleton className="h-[620px]" />;
+    if (metrics.isLoading) return <Skeleton className="h-[620px]" />;
   if (metrics.isError) return <ErrorState message={metrics.error.message} onRetry={() => void metrics.refetch()} />;
 
   const data = metrics.data;
@@ -99,9 +99,9 @@ export function OverviewPage() {
           </p>
         </div>
         <div className="flex shrink-0 flex-col gap-2">
-          <Button onClick={() => sampleData.mutate()} disabled={sampleData.isPending}>
+          <Button onClick={() => liveDemo.mutate()} disabled={liveDemo.isPending}>
             <Play className="h-4 w-4" />
-            {sampleData.isPending ? "Preparing sample..." : "Show me a sample"}
+            {sampleData.isPending ? "Submitting task..." : "Run a live task"}
           </Button>
           <Button variant="secondary" onClick={() => {
             void queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
@@ -113,10 +113,43 @@ export function OverviewPage() {
         </div>
       </section>
 
-      {sampleData.isError ? (
+      {liveDemo.isError ? (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-          Could not create sample activity: {sampleData.error.message}
+          Could not create sample activity: {liveDemo.error.message}
         </div>
+      ) : null}
+
+      {demoJobId ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Your live demonstration</CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">A new task submitted to the backend. Its saved status is checked every second.</p>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">Task {demoJobId.slice(0, 8)}</div>
+                <div className="mt-1 text-xs text-muted-foreground">Created by your click · not preloaded sample history</div>
+              </div>
+              {demoJob ? <span className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${statusClass(demoJob.status)}`}>{statusLabel(demoJob.status)}</span> : <span className="text-xs text-muted-foreground">Waiting for first status update…</span>}
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-4">
+              {[
+                { label: "1. Submitted", done: Boolean(demoJob), note: demoJob?.created_at },
+                { label: "2. Picked up", done: Boolean(demoJob?.started_at), note: demoJob?.started_at },
+                { label: "3. Worker running", done: Boolean(demoJob?.started_at), note: demoJob?.worker_id ? `Worker ${demoJob.worker_id}` : "Waiting for worker" },
+                { label: "4. Finished", done: demoJob?.status === "completed", note: demoJob?.completed_at }
+              ].map((step) => (
+                <div key={step.label} className="rounded-lg border border-border p-3">
+                  <div className={`text-xs font-semibold ${step.done ? "text-emerald-400" : "text-muted-foreground"}`}>{step.done ? "✓ " : "○ "}{step.label}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{step.note ? (step.note.length > 24 ? timeAgo(step.note) : step.note) : "Not yet"}</div>
+                </div>
+              ))}
+            </div>
+            {demoJob?.history?.length ? <ol className="mt-4 space-y-2 border-l border-border pl-4">{demoJob.history.map((entry) => <li key={entry} className="text-xs leading-5 text-muted-foreground">{entry}</li>)}</ol> : null}
+            <p className="mt-4 text-xs text-muted-foreground">Honest demo note: queueing, worker pickup and status updates are real. The demo worker simulates the task's business work with a short delay; it does not send an email or generate a real report.</p>
+          </CardContent>
+        </Card>
       ) : null}
 
       <section>
@@ -203,7 +236,7 @@ export function OverviewPage() {
           <CardContent>
             {jobs.isLoading ? <Skeleton className="h-40" /> : null}
             {jobs.isError ? <p className="text-sm text-muted-foreground">Task list could not be loaded.</p> : null}
-            {jobs.data?.length === 0 ? <p className="py-5 text-sm text-muted-foreground">No tasks yet. Select “Show me a sample” to see how the system works.</p> : null}
+            {jobs.data?.length === 0 ? <p className="py-5 text-sm text-muted-foreground">No tasks yet. Run a live task to watch a worker process one.</p> : null}
             {jobs.data?.map((job) => <JobRow key={job.id} job={job} />)}
           </CardContent>
         </Card>
