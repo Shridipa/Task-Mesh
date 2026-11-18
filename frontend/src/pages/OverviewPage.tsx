@@ -50,7 +50,7 @@ export function OverviewPage() {
   const jobs = useQuery({
     queryKey: ["jobs", "overview"],
     queryFn: () => listJobs({ limit: 100 }),
-    refetchInterval: 10_000
+    refetchInterval: 1_000
   });
   const events = useQuery({
     queryKey: ["recent-events"],
@@ -70,7 +70,7 @@ export function OverviewPage() {
   });
   const demoJob = jobs.data?.find((job) => job.id === demoJobId);
 
-    if (metrics.isLoading) return <Skeleton className="h-[620px]" />;
+  if (metrics.isLoading) return <Skeleton className="h-[620px]" />;
   if (metrics.isError) return <ErrorState message={metrics.error.message} onRetry={() => void metrics.refetch()} />;
 
   const data = metrics.data;
@@ -101,7 +101,7 @@ export function OverviewPage() {
         <div className="flex shrink-0 flex-col gap-2">
           <Button onClick={() => liveDemo.mutate()} disabled={liveDemo.isPending}>
             <Play className="h-4 w-4" />
-            {sampleData.isPending ? "Submitting task..." : "Run a live task"}
+            {liveDemo.isPending ? "Submitting task..." : "Run a live task"}
           </Button>
           <Button variant="secondary" onClick={() => {
             void queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
@@ -115,7 +115,7 @@ export function OverviewPage() {
 
       {liveDemo.isError ? (
         <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-          Could not create sample activity: {liveDemo.error.message}
+          Could not submit the live task: {liveDemo.error.message}
         </div>
       ) : null}
 
