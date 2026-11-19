@@ -1,0 +1,42 @@
+# Version control and local tooling
+.git
+.gitignore
+.github
+.vscode
+.idea
+.ruff_cache
+.pytest_cache
+.coverage
+htmlcov
+
+# Python environments and artifacts
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+build
+dist
+
+# Node / frontend build output (the frontend has its own image)
+frontend/node_modules
+frontend/dist
+
+# Local state and secrets
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
+logs
+*.log
+artifacts
+
+# Tests and developer documentation are not needed in runtime images
+tests
+conftest.py
+loadtest.js
+infra
+monitoring
+README.md

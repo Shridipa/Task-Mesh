@@ -2,18 +2,34 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import PlainTextResponse
 
+from ...config import get_settings
 from ...engine import engine
-from ..auth import require_read
+from ..auth import Principal, require_read_optional
 
 router = APIRouter()
 
 
+async def _metrics_auth(
+    principal: Principal | None = Depends(require_read_optional),
+) -> Principal | None:
+    """Prometheus scraping may be unauthenticated on an internal network."""
+    if get_settings().metrics_public and principal is None:
+        return None
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return principal
+
+
 @router.get("/summary", response_model=dict)
 async def metrics_summary(
-    _: str = Depends(require_read),
+    _: Principal | None = Depends(_metrics_auth),
 ):
     """Return a JSON summary of system metrics.
 
@@ -35,7 +51,7 @@ async def metrics_summary(
 
 @router.get("/prometheus", response_class=PlainTextResponse)
 async def prometheus_metrics(
-    _: str = Depends(require_read),
+    _: Principal | None = Depends(_metrics_auth),
 ):
     """Return Prometheus-formatted metrics."""
     m = await engine.metrics()

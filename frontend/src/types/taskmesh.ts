@@ -1,5 +1,14 @@
 export type UserRole = "admin" | "developer" | "viewer";
 
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  expires_at: number;
+  subject: string;
+  role: UserRole;
+  tenant: string;
+}
+
 export type JobStatus =
   | "pending"
   | "scheduled"

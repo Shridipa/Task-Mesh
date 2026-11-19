@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from taskmesh.engine import engine
 from taskmesh.main import app
 from taskmesh.models import JobCreate
+from support import DEVELOPER_HEADERS as DEV_HEADERS
 from taskmesh.tasks import UnsupportedJobType, execute_job
 from taskmesh.text_processing import (
     MAX_TEXT_LENGTH,
@@ -19,7 +20,6 @@ from taskmesh.text_processing import (
     process_text,
 )
 
-DEV_HEADERS = {"X-Role": "developer"}
 
 SAMPLE = "Hello world. This is TaskMesh!\n\nWorkers run tasks?"
 

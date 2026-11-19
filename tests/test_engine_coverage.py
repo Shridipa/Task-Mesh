@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Self
 
 import pytest
 
@@ -18,7 +19,7 @@ class _FakePipeline:
     def __init__(self) -> None:
         self.commands: list[tuple] = []
 
-    async def __aenter__(self) -> _FakePipeline:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:

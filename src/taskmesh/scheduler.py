@@ -19,6 +19,7 @@ import redis.asyncio as redis
 
 from .config import get_settings
 from .engine import engine
+from .liveness import touch_liveness
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ async def run_scheduler(stop_event: asyncio.Event | None = None) -> None:
 
     try:
         while not stop_event.is_set():
+            touch_liveness(settings.scheduler_health_file)
             try:
                 if state.available:
                     lock_acquired = await state.client.set(

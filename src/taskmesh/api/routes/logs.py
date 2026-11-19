@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from ...engine import engine
-from ..auth import require_read
+from ..auth import Principal, require_read
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ async def get_logs(
     offset: int = Query(0, ge=0),
     event_type: str | None = Query(None),
     job_id: str | None = Query(None),
-    _: str = Depends(require_read),
+    _: Principal = Depends(require_read),
 ):
     """Get recent log entries (events formatted as logs).
 

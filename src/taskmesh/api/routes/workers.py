@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 
 from ...engine import engine
 from ...models import WorkerHeartbeat
-from ..auth import require_worker, require_worker_token, require_read
+from ..auth import Principal, require_read, require_worker_token
 
 router = APIRouter()
 
@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/", response_model=list[dict[str, Any]])
 async def list_workers(
     active: bool = Query(False, description="Filter to active workers only"),
-    _: str = Depends(require_read),
+    _: Principal = Depends(require_read),
 ):
     """List all workers with optional active-only filter."""
     workers = await engine.list_workers(active_only=active)
@@ -27,10 +27,13 @@ async def list_workers(
 @router.post("/heartbeat", response_model=dict[str, Any])
 async def worker_heartbeat(
     heartbeat: WorkerHeartbeat,
-    _role: str = Depends(require_worker),
     _token: str = Depends(require_worker_token),
 ):
-    """Register a worker heartbeat. Requires worker role + valid token."""
+    """Register a worker heartbeat. Requires the shared worker token.
+
+    The worker id comes from the body, so a heartbeat cannot overwrite another
+    worker's row without knowing its id.
+    """
     worker = await engine.heartbeat(heartbeat)
     # engine.heartbeat already returns a plain dict
     return _serialize_worker(worker)

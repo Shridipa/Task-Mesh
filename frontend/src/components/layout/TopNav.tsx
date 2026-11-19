@@ -1,10 +1,9 @@
-import { Menu, Search } from "lucide-react";
-import { useLocation } from "react-router";
+import { LogOut, Menu, Search, ShieldCheck } from "lucide-react";
+import { Link, useLocation } from "react-router";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { supportedRoles } from "@/api/auth";
 import { useAuthStore } from "@/store/auth-store";
 import { useUiStore } from "@/store/ui-store";
-import type { UserRole } from "@/types/taskmesh";
 
 function titleFromPath(pathname: string): string {
   if (pathname === "/") {
@@ -20,7 +19,8 @@ function titleFromPath(pathname: string): string {
 export function TopNav() {
   const location = useLocation();
   const role = useAuthStore((state) => state.role);
-  const setRole = useAuthStore((state) => state.setRole);
+  const token = useAuthStore((state) => state.token);
+  const signOut = useAuthStore((state) => state.signOut);
   const setCommandOpen = useUiStore((state) => state.setCommandOpen);
 
   return (
@@ -39,21 +39,22 @@ export function TopNav() {
           <Search className="h-4 w-4" />
           <span className="hidden sm:inline">Ctrl+K</span>
         </Button>
-        <label className="sr-only" htmlFor="role-select">
-          Role
-        </label>
-        <select
-          id="role-select"
-          className="h-9 rounded-xl border border-border bg-muted px-3 text-sm capitalize outline-none focus:ring-2 focus:ring-primary"
-          value={role}
-          onChange={(event) => setRole(event.target.value as UserRole)}
-        >
-          {supportedRoles.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
+        {token && role ? (
+          <div className="flex items-center gap-2">
+            <Badge className="capitalize">{role}</Badge>
+            <Button aria-label="Sign out" variant="ghost" onClick={signOut}>
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <Link
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-border px-3 text-sm hover:bg-muted"
+            to="/settings"
+          >
+            <ShieldCheck className="h-4 w-4" />
+            <span className="hidden sm:inline">Sign in</span>
+          </Link>
+        )}
       </div>
     </header>
   );

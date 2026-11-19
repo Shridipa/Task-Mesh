@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from ...engine import engine
-from ..auth import require_admin
+from ..auth import Principal, require_admin
 
 router = APIRouter()
 
@@ -20,7 +20,7 @@ _scheduler_pause_event.set()  # not paused by default
 
 @router.get("/status", response_model=dict[str, Any])
 async def scheduler_status(
-    _: str = Depends(require_admin),
+    _: Principal = Depends(require_admin),
 ):
     """Get scheduler status (running/paused, uptime, etc.)."""
     return {
@@ -33,7 +33,7 @@ async def scheduler_status(
 
 @router.post("/pause", response_model=dict[str, Any])
 async def scheduler_pause(
-    _: str = Depends(require_admin),
+    _: Principal = Depends(require_admin),
 ):
     """Pause the scheduler. Scheduled jobs won't be promoted to pending."""
     global _scheduler_paused
@@ -44,7 +44,7 @@ async def scheduler_pause(
 
 @router.post("/resume", response_model=dict[str, Any])
 async def scheduler_resume(
-    _: str = Depends(require_admin),
+    _: Principal = Depends(require_admin),
 ):
     """Resume the scheduler."""
     global _scheduler_paused
@@ -55,7 +55,7 @@ async def scheduler_resume(
 
 @router.post("/run-now", response_model=dict[str, Any])
 async def scheduler_run_now(
-    _: str = Depends(require_admin),
+    _: Principal = Depends(require_admin),
 ):
     """Manually trigger release of due scheduled jobs."""
     released = await engine.release_due_jobs()

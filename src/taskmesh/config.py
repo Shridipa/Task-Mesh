@@ -17,6 +17,7 @@ environment.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from urllib.parse import urlsplit, urlunsplit
@@ -181,11 +182,14 @@ class Settings:
     embedded_scheduler: bool = True
     worker_lease_seconds: int = 900
     job_poll_seconds: float = 1.0
+    worker_health_file: str | None = None
+    scheduler_health_file: str | None = None
     max_request_bytes: int = 2 * 1024 * 1024
     rate_limit_submissions: int = 10
     rate_limit_window_seconds: int = 60
     log_level: str = "INFO"
     log_format: str = "text"
+    metrics_public: bool = False
 
     @property
     def is_sqlite(self) -> bool:
@@ -277,11 +281,14 @@ def _load_from_env() -> Settings:
         embedded_scheduler=_env_bool("EMBEDDED_SCHEDULER", True),
         worker_lease_seconds=_env_int("WORKER_LEASE_SECONDS", 900, minimum=30),
         job_poll_seconds=float(_env("JOB_POLL_SECONDS", "1") or 1),
+        worker_health_file=_env("WORKER_HEALTH_FILE"),
+        scheduler_health_file=_env("SCHEDULER_HEALTH_FILE"),
         max_request_bytes=_env_int("MAX_REQUEST_BYTES", 2 * 1024 * 1024, minimum=1024),
         rate_limit_submissions=_env_int("RATE_LIMIT_SUBMISSIONS", 10, minimum=1),
         rate_limit_window_seconds=_env_int("RATE_LIMIT_WINDOW_SECONDS", 60, minimum=1),
         log_level=(_env("LOG_LEVEL", "INFO") or "INFO").upper(),
         log_format=log_format,
+        metrics_public=_env_bool("METRICS_PUBLIC", False),
     )
 
 

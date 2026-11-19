@@ -27,6 +27,7 @@ import time
 from .config import get_settings
 from .engine import engine
 from .errors import JobInputError, JobOwnershipError
+from .liveness import touch_liveness
 from .models import WorkerHeartbeat
 from .tasks import UnsupportedJobType, execute_job
 
@@ -83,6 +84,7 @@ async def run_worker(
     logger.info("Worker starting", extra={"worker_id": worker_id})
 
     while not stop_event.is_set():
+        touch_liveness(settings.worker_health_file)
         try:
             await engine.heartbeat(
                 WorkerHeartbeat(

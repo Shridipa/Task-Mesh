@@ -12,9 +12,9 @@ from taskmesh.csv_analysis import CSV_JOB_TYPE, MAX_CSV_LENGTH, analyze_csv
 from taskmesh.errors import JobInputError
 from taskmesh.json_validation import JSON_JOB_TYPE, MAX_JSON_LENGTH, validate_json
 from taskmesh.main import app
+from support import DEVELOPER_HEADERS as DEV_HEADERS
 from taskmesh.tasks import UnsupportedJobType, execute_job
 
-DEV_HEADERS = {"X-Role": "developer"}
 
 JSON_DOCUMENT = """{
   "name": "TaskMesh",

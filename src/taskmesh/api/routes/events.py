@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from ...engine import engine
-from ..auth import require_read
+from ..auth import Principal, require_read
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ async def list_events(
     event_type: str | None = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    _: str = Depends(require_read),
+    _: Principal = Depends(require_read),
 ):
     """List events with optional filtering."""
     events = await engine.list_events(
