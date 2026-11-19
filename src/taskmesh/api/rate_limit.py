@@ -38,14 +38,30 @@ class SlidingWindowLimiter:
         self.max_tracked_clients = max_tracked_clients
         self._windows: dict[str, deque[float]] = {}
 
+    def _evict(self, now: float) -> None:
+        """Keep the number of tracked clients bounded.
+
+        Expired windows are dropped first; if that is not enough, the clients
+        seen longest ago are forgotten, which gives them a fresh budget rather
+        than letting the map grow without limit.
+        """
+        if len(self._windows) < self.max_tracked_clients:
+            return
+        cutoff = now - self.window_seconds
+        for client, window in list(self._windows.items()):
+            while window and window[0] < cutoff:
+                window.popleft()
+            if not window:
+                del self._windows[client]
+        # Make room for the key that is about to be added.
+        overflow = len(self._windows) - self.max_tracked_clients + 1
+        for client in list(self._windows)[: max(overflow, 0)]:
+            del self._windows[client]
+
     def check(self, key: str, message: str) -> None:
         """Record a call for ``key`` or raise HTTP 429 when the window is full."""
         now = time.monotonic()
-
-        if len(self._windows) > self.max_tracked_clients:
-            for stale in [client for client, window in self._windows.items() if not window]:
-                del self._windows[stale]
-
+        self._evict(now)
         window = self._windows.setdefault(key, deque())
         while window and now - window[0] > self.window_seconds:
             window.popleft()

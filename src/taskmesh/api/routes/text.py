@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from ...config import get_settings
 from ...engine import engine
 from ...models import JobCreate
 from ...text_processing import MAX_TEXT_LENGTH, TEXT_JOB_TYPE
@@ -21,11 +22,10 @@ from ..rate_limit import SlidingWindowLimiter, client_key
 
 router = APIRouter()
 
-SUBMISSIONS_PER_WINDOW = 10
-SUBMIT_WINDOW_SECONDS = 60.0
-
+_settings = get_settings()
 _limiter = SlidingWindowLimiter(
-    limit=SUBMISSIONS_PER_WINDOW, window_seconds=SUBMIT_WINDOW_SECONDS
+    limit=_settings.rate_limit_submissions,
+    window_seconds=float(_settings.rate_limit_window_seconds),
 )
 
 

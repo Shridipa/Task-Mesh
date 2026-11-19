@@ -13,6 +13,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from ...config import get_settings
 from ...csv_analysis import CSV_JOB_TYPE, MAX_CSV_LENGTH
 from ...engine import engine
 from ...json_validation import JSON_JOB_TYPE, MAX_JSON_LENGTH
@@ -27,7 +28,11 @@ ANALYSIS_JOB_TYPES = (JSON_JOB_TYPE, CSV_JOB_TYPE)
 TASK_LIMITS = {JSON_JOB_TYPE: MAX_JSON_LENGTH, CSV_JOB_TYPE: MAX_CSV_LENGTH}
 MAX_CONTENT_LENGTH = max(TASK_LIMITS.values())
 
-_limiter = SlidingWindowLimiter(limit=10, window_seconds=60.0)
+_settings = get_settings()
+_limiter = SlidingWindowLimiter(
+    limit=_settings.rate_limit_submissions,
+    window_seconds=float(_settings.rate_limit_window_seconds),
+)
 
 
 class AnalysisJobRequest(BaseModel):

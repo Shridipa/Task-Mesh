@@ -72,8 +72,9 @@ async def run_worker(
 ) -> int:
     """Run the worker loop until ``stop_event`` is set.
 
-    Returns the number of jobs executed. ``max_jobs`` bounds the loop, which
-    keeps tests deterministic; production runs without a bound.
+    Returns the number of jobs completed successfully. ``max_jobs`` bounds the
+    number of jobs *handled* (completed, failed or retried), which keeps tests
+    deterministic; production runs without a bound.
     """
     settings = get_settings()
     worker_id = os.getenv("WORKER_ID", socket.gethostname())
@@ -81,10 +82,13 @@ async def run_worker(
     stop_event = stop_event or asyncio.Event()
     current_job_id: str | None = None
     handled = 0
+    processed = 0
 
     logger.info("Worker starting", extra={"worker_id": worker_id})
 
     while not stop_event.is_set():
+        if max_jobs is not None and processed >= max_jobs:
+            break
         touch_liveness(settings.worker_health_file)
         try:
             await engine.heartbeat(
@@ -165,8 +169,7 @@ async def run_worker(
                         },
                     )
 
-            if max_jobs is not None and handled >= max_jobs:
-                break
+            processed += 1
 
         except asyncio.CancelledError:
             raise
@@ -183,7 +186,10 @@ async def run_worker(
             except TimeoutError:
                 continue
 
-    logger.info("Worker stopped", extra={"worker_id": worker_id, "jobs_handled": handled})
+    logger.info(
+        "Worker stopped",
+        extra={"worker_id": worker_id, "jobs_handled": handled, "jobs_processed": processed},
+    )
     return handled
 
 
