@@ -12,6 +12,29 @@ from taskmesh.models import JobCreate
 from taskmesh.worker import run_worker
 
 
+@pytest.fixture(autouse=True)
+def _only_our_jobs() -> None:
+    """Guarantee the worker under test can only pick up this test's job.
+
+    Other modules leave queued jobs behind, and a worker polls the whole queue,
+    so without this the worker may execute an unrelated job instead.
+    """
+
+    async def _clear() -> None:
+        from sqlalchemy import delete
+
+        from taskmesh.api.dependencies import engine
+        from taskmesh.db.models import Job as OrmJob
+
+        async with engine.begin() as conn:
+            await conn.execute(
+                delete(OrmJob).where(OrmJob.status.in_(["pending", "scheduled", "running"]))
+            )
+        await engine.dispose()
+
+    asyncio.run(_clear())
+
+
 def _status(job: dict) -> str:
     return getattr(job["status"], "value", job["status"])
 
