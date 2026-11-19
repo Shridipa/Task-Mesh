@@ -14,16 +14,15 @@ application uses ``str(uuid.uuid4())``), statuses are short strings that mirror
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from typing import List
+from datetime import UTC, datetime
 
 from sqlalchemy import (
+    JSON,
     DateTime,
     Float,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     func,
@@ -41,7 +40,7 @@ JSONDocument = JSON().with_variant(JSONB(), "postgresql")
 
 def utc_now() -> datetime:
     """Timezone-aware UTC timestamp."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Job(Base):
@@ -88,7 +87,7 @@ class Job(Base):
     # Worker ids are a soft reference: a worker may lease a job before its
     # heartbeat row exists and rows are removed when a worker retires.
     worker_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    history: Mapped[List[str]] = mapped_column(JSONDocument, nullable=False, default=list)
+    history: Mapped[list[str]] = mapped_column(JSONDocument, nullable=False, default=list)
 
 
 class Worker(Base):

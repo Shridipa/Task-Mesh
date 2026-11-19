@@ -13,17 +13,20 @@ import os
 import sys
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import create_engine, pool
+
+from alembic import context
 
 # Ensure the repository root (and therefore ``src``) is importable.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from taskmesh.config import ConfigError, redact_url, to_sync_url  # noqa: E402
-from taskmesh.db import Base  # noqa: E402
-from taskmesh.db import models  # noqa: E402,F401  (registers the ORM models)
+from taskmesh.config import ConfigError, redact_url, to_sync_url
+from taskmesh.db import (
+    Base,
+    models,  # noqa: F401  (registers the ORM models)
+)
 
 config = context.config
 

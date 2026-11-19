@@ -18,6 +18,7 @@ refuse writes from a worker whose lease has already expired.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -98,10 +99,8 @@ async def run_worker(
 
             job = await engine.lease_next_job(worker_id)
             if job is None:
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(stop_event.wait(), timeout=interval)
-                except TimeoutError:
-                    pass
                 continue
 
             job_id = str(job["id"])
@@ -171,8 +170,8 @@ async def run_worker(
 
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - keep the worker loop alive
-            logger.error("Worker error: %s", exc, exc_info=True)
+        except Exception as exc:
+            logger.exception("Worker error: %s", exc)
             if current_job_id is not None:
                 try:
                     await engine.fail_job(current_job_id, str(exc), worker_id=worker_id)
@@ -198,12 +197,10 @@ async def main() -> None:
         stop_event.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
+        # Windows and non-main threads (e.g. TestClient's lifespan) cannot
+        # install signal handlers; that is fine, shutdown still works.
+        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
             loop.add_signal_handler(sig, _request_stop)
-        except (NotImplementedError, RuntimeError, ValueError):
-            # Windows, or a non-main thread (e.g. TestClient's lifespan).
-            # Signal handling is a convenience, not a requirement, so continue.
-            pass
 
     await run_worker(stop_event)
 

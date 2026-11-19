@@ -13,7 +13,7 @@ import json
 import logging
 import sys
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .config import get_settings
 
@@ -55,7 +55,7 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -74,7 +74,7 @@ class TextFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         base = (
-            f"{datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()} "
+            f"{datetime.fromtimestamp(record.created, tz=UTC).isoformat()} "
             f"{record.levelname:<8} {record.name}: {record.getMessage()}"
         )
         extra = {

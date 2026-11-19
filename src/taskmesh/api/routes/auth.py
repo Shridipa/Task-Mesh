@@ -28,7 +28,7 @@ class TokenRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 - a scheme name, not a credential
     expires_at: int
     subject: str
     role: str

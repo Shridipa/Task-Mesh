@@ -7,11 +7,11 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from support import DEVELOPER_HEADERS as DEV_HEADERS
 
 from taskmesh.engine import engine
 from taskmesh.main import app
 from taskmesh.models import JobCreate
-from support import DEVELOPER_HEADERS as DEV_HEADERS
 from taskmesh.tasks import UnsupportedJobType, execute_job
 from taskmesh.text_processing import (
     MAX_TEXT_LENGTH,
@@ -19,7 +19,6 @@ from taskmesh.text_processing import (
     count_sentences,
     process_text,
 )
-
 
 SAMPLE = "Hello world. This is TaskMesh!\n\nWorkers run tasks?"
 

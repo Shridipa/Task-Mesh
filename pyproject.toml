@@ -42,3 +42,46 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# An explicit rule set keeps `ruff check` identical locally and in CI whatever
+# version of Ruff is installed (newer versions expand their defaults).
+select = [
+  "E4",   # import problems
+  "E7",   # statements that are not useful
+  "E9",   # runtime errors
+  "F",    # pyflakes
+  "I",    # import sorting
+  "B",    # bugbear
+  "UP",   # pyupgrade
+  "SIM",  # simplify
+  "RUF",  # ruff-specific
+  "S",    # bandit-style security checks
+  "BLE",  # blind except
+  "G",    # logging format
+  "C4",   # comprehensions
+  "DTZ",  # timezone-aware datetimes
+  "PIE",  # misc lint
+  "RET",  # return statements
+  "PYI",  # stub-file consistency (applies to typed methods in tests too)
+  "EXE",  # executables
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares dependencies through call defaults; that is the framework's
+# documented interface, not an accidental mutable default.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Body",
+  "fastapi.Header",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert by design and use obviously fake credentials.
+"tests/**" = ["S101", "S105", "S106", "S311"]
+"conftest.py" = ["S101", "S105", "S106"]
+# The smoke script talks to an explicitly configured API base URL.
+"scripts/*.py" = ["S310"]
+# Alembic must extend sys.path before importing the project package.
+"alembic/env.py" = ["E402"]

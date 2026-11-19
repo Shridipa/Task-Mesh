@@ -114,7 +114,6 @@ async def complete_job(
         raise HTTPException(
             status_code=409, detail="This worker no longer holds the job lease"
         ) from None
-    return None
 
 
 @router.post("/{job_id}/fail", response_model=dict[str, Any])
@@ -187,4 +186,3 @@ async def delete_job(
     """Delete a job. Admin only."""
     _ensure_visible(await engine.get_job(job_id), principal)
     await engine.delete_job(job_id)
-    return None

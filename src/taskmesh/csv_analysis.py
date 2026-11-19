@@ -93,7 +93,7 @@ def analyze_csv(text: str) -> dict[str, Any]:
     data_rows = rows[1:]
     width = len(columns)
 
-    missing_by_column = {name: 0 for name in columns}
+    missing_by_column = dict.fromkeys(columns, 0)
     column_values: dict[str, list[str]] = {name: [] for name in columns}
     duplicate_rows = 0
     ragged_rows = 0

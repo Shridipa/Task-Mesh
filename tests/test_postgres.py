@@ -119,7 +119,7 @@ def _maintenance_url() -> str:
 
 def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "DATABASE_URL": database_url}
-    return subprocess.run(
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-m", "alembic", *args],
         cwd=REPO_ROOT,
         env=env,

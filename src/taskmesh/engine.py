@@ -3,16 +3,19 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import redis.asyncio as redis
+from redis.exceptions import RedisError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .api.dependencies import engine as db_engine
 from .config import get_settings
-from .db.models import Job as OrmJob, Worker as OrmWorker, Event as OrmEvent
+from .db.models import Event as OrmEvent
+from .db.models import Job as OrmJob
+from .db.models import Worker as OrmWorker
 from .errors import JobOwnershipError
 from .models import JobCreate, JobStatus, Metrics, WorkerHeartbeat, utc_now
 
@@ -75,7 +78,10 @@ class RateLimiter:
                 results = await pipe.execute()
             current_count = results[1]
             return current_count < self.limit
-        except Exception:
+        except (RedisError, OSError) as exc:
+            # Without Redis the limiter cannot count; allow the request rather
+            # than making the whole API unavailable.
+            logger.debug("Rate limiter unavailable, allowing request: %s", exc)
             return True
 
 
@@ -114,15 +120,16 @@ class TaskMeshEngine:
         }
         try:
             await redis_client.publish("taskmesh_logs", json.dumps(payload))
-        except Exception:
-            pass
+        except (RedisError, OSError) as exc:
+            # Live log fan-out is best effort: events are already persisted.
+            logger.debug("Redis log publish failed: %s", exc)
 
     @staticmethod
     def _is_future(value: datetime | None) -> bool:
         if value is None:
             return False
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
+            value = value.replace(tzinfo=UTC)
         return value > utc_now()
 
     # ------------------------------------------------------------------
@@ -134,50 +141,49 @@ class TaskMeshEngine:
         if not await self.rate_limiter.allow(f"tenant:{request.tenant_id}:create"):
             raise ValueError("rate_limit_exceeded")
 
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                if request.idempotency_key:
-                    stmt = select(OrmJob).where(
-                        OrmJob.tenant_id == request.tenant_id,
-                        OrmJob.idempotency_key == request.idempotency_key,
-                    )
-                    result = await session.execute(stmt)
-                    existing = result.scalar_one_or_none()
-                    if existing:
-                        # Refresh so all columns are loaded before session closes
-                        await session.refresh(existing)
-                        return _orm_to_dict(existing)
+        async with AsyncSession(db_engine) as session, session.begin():
+            if request.idempotency_key:
+                stmt = select(OrmJob).where(
+                    OrmJob.tenant_id == request.tenant_id,
+                    OrmJob.idempotency_key == request.idempotency_key,
+                )
+                result = await session.execute(stmt)
+                existing = result.scalar_one_or_none()
+                if existing:
+                    # Refresh so all columns are loaded before session closes
+                    await session.refresh(existing)
+                    return _orm_to_dict(existing)
 
-                status = (
-                    JobStatus.SCHEDULED
-                    if self._is_future(request.execute_at)
-                    else JobStatus.PENDING
-                )
-                job_id = str(uuid.uuid4())
-                job = OrmJob(
-                    id=job_id,
-                    job_type=request.job_type,
-                    payload=request.payload,
-                    tenant_id=request.tenant_id,
-                    priority=request.priority,
-                    status=status.value,
-                    execute_at=request.execute_at,
-                    max_retries=request.max_retries,
-                    idempotency_key=request.idempotency_key,
-                    history=[f"{utc_now().isoformat()} JobCreated"],
-                )
-                session.add(job)
-                # Flush the job first: events reference jobs through a foreign
-                # key, and PostgreSQL rejects the event insert if the job row
-                # is not there yet.
-                await session.flush()
-                await self._emit(
-                    session, "JobCreated", str(job.id), job.tenant_id, f"Job {job.id} accepted"
-                )
-                await session.flush()
-                await session.refresh(job)
-                # Convert to dict BEFORE session closes
-                return _orm_to_dict(job)
+            status = (
+                JobStatus.SCHEDULED
+                if self._is_future(request.execute_at)
+                else JobStatus.PENDING
+            )
+            job_id = str(uuid.uuid4())
+            job = OrmJob(
+                id=job_id,
+                job_type=request.job_type,
+                payload=request.payload,
+                tenant_id=request.tenant_id,
+                priority=request.priority,
+                status=status.value,
+                execute_at=request.execute_at,
+                max_retries=request.max_retries,
+                idempotency_key=request.idempotency_key,
+                history=[f"{utc_now().isoformat()} JobCreated"],
+            )
+            session.add(job)
+            # Flush the job first: events reference jobs through a foreign
+            # key, and PostgreSQL rejects the event insert if the job row
+            # is not there yet.
+            await session.flush()
+            await self._emit(
+                session, "JobCreated", str(job.id), job.tenant_id, f"Job {job.id} accepted"
+            )
+            await session.flush()
+            await session.refresh(job)
+            # Convert to dict BEFORE session closes
+            return _orm_to_dict(job)
 
     async def list_jobs(
         self,
@@ -214,70 +220,69 @@ class TaskMeshEngine:
         Falls back to a simpler atomic UPDATE-based approach on SQLite (which doesn't
         support SKIP LOCKED).
         """
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                if self._is_sqlite:
-                    # SQLite fallback: use a simpler approach without FOR UPDATE SKIP LOCKED
-                    # First, find a pending job
-                    stmt = select(OrmJob).where(OrmJob.status == JobStatus.PENDING.value)
-                    if tenant_id:
-                        stmt = stmt.where(OrmJob.tenant_id == tenant_id)
-                    stmt = stmt.order_by(OrmJob.priority.desc(), OrmJob.created_at.asc()).limit(1)
-                    result = await session.execute(stmt)
-                    job = result.scalar_one_or_none()
-                    if not job:
-                        return None
+        async with AsyncSession(db_engine) as session, session.begin():
+            if self._is_sqlite:
+                # SQLite fallback: use a simpler approach without FOR UPDATE SKIP LOCKED
+                # First, find a pending job
+                stmt = select(OrmJob).where(OrmJob.status == JobStatus.PENDING.value)
+                if tenant_id:
+                    stmt = stmt.where(OrmJob.tenant_id == tenant_id)
+                stmt = stmt.order_by(OrmJob.priority.desc(), OrmJob.created_at.asc()).limit(1)
+                result = await session.execute(stmt)
+                job = result.scalar_one_or_none()
+                if not job:
+                    return None
 
-                    # Now atomically update it to RUNNING (if still pending)
-                    update_stmt = (
-                        update(OrmJob)
-                        .where(
-                            OrmJob.id == job.id,
-                            OrmJob.status == JobStatus.PENDING.value,
-                        )
-                        .values(
-                            status=JobStatus.RUNNING.value,
-                            worker_id=worker_id,
-                            started_at=utc_now(),
-                        )
+                # Now atomically update it to RUNNING (if still pending)
+                update_stmt = (
+                    update(OrmJob)
+                    .where(
+                        OrmJob.id == job.id,
+                        OrmJob.status == JobStatus.PENDING.value,
                     )
-                    result = await session.execute(update_stmt)
-                    if result.rowcount == 0:
-                        # Another worker grabbed it — return None so caller retries
-                        return None
-
-                    # Re-fetch the updated job
-                    job = await session.get(OrmJob, job.id)
-                else:
-                    stmt = select(OrmJob).where(OrmJob.status == JobStatus.PENDING.value)
-                    if tenant_id:
-                        stmt = stmt.where(OrmJob.tenant_id == tenant_id)
-                    stmt = (
-                        stmt.order_by(OrmJob.priority.desc(), OrmJob.created_at.asc())
-                        .with_for_update(skip_locked=True)
-                        .limit(1)
+                    .values(
+                        status=JobStatus.RUNNING.value,
+                        worker_id=worker_id,
+                        started_at=utc_now(),
                     )
-                    result = await session.execute(stmt)
-                    job = result.scalar_one_or_none()
-                    if not job:
-                        return None
-
-                    job.status = JobStatus.RUNNING.value
-                    job.worker_id = worker_id
-                    job.started_at = utc_now()
-
-                job.history = job.history + [f"{utc_now().isoformat()} JobStarted by {worker_id}"]
-
-                await self._emit(
-                    session,
-                    "JobStarted",
-                    str(job.id),
-                    job.tenant_id,
-                    f"{worker_id} leased job {job.id}",
                 )
-                await session.flush()
-                await session.refresh(job)
-                return _orm_to_dict(job)
+                result = await session.execute(update_stmt)
+                if result.rowcount == 0:
+                    # Another worker grabbed it — return None so caller retries
+                    return None
+
+                # Re-fetch the updated job
+                job = await session.get(OrmJob, job.id)
+            else:
+                stmt = select(OrmJob).where(OrmJob.status == JobStatus.PENDING.value)
+                if tenant_id:
+                    stmt = stmt.where(OrmJob.tenant_id == tenant_id)
+                stmt = (
+                    stmt.order_by(OrmJob.priority.desc(), OrmJob.created_at.asc())
+                    .with_for_update(skip_locked=True)
+                    .limit(1)
+                )
+                result = await session.execute(stmt)
+                job = result.scalar_one_or_none()
+                if not job:
+                    return None
+
+                job.status = JobStatus.RUNNING.value
+                job.worker_id = worker_id
+                job.started_at = utc_now()
+
+            job.history = [*(job.history or []), f"{utc_now().isoformat()} JobStarted by {worker_id}"]
+
+            await self._emit(
+                session,
+                "JobStarted",
+                str(job.id),
+                job.tenant_id,
+                f"{worker_id} leased job {job.id}",
+            )
+            await session.flush()
+            await session.refresh(job)
+            return _orm_to_dict(job)
 
     async def complete_job(
         self, job_id: str, result: dict[str, Any] | None = None, worker_id: str | None = None
@@ -292,51 +297,50 @@ class TaskMeshEngine:
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                if self._is_sqlite:
-                    # SQLite: simpler update without FOR UPDATE
-                    conditions = [OrmJob.id == str(uid)]
-                    if worker_id is not None:
-                        conditions.append(OrmJob.worker_id == worker_id)
-                    stmt = (
-                        update(OrmJob)
-                        .where(*conditions)
-                        .values(
-                            status=JobStatus.COMPLETED.value,
-                            completed_at=utc_now(),
-                            result=result,
-                        )
+        async with AsyncSession(db_engine) as session, session.begin():
+            if self._is_sqlite:
+                # SQLite: simpler update without FOR UPDATE
+                conditions = [OrmJob.id == str(uid)]
+                if worker_id is not None:
+                    conditions.append(OrmJob.worker_id == worker_id)
+                stmt = (
+                    update(OrmJob)
+                    .where(*conditions)
+                    .values(
+                        status=JobStatus.COMPLETED.value,
+                        completed_at=utc_now(),
+                        result=result,
                     )
-                    update_result = await session.execute(stmt)
-                    if update_result.rowcount == 0:
-                        if await session.get(OrmJob, str(uid)) is None:
-                            raise KeyError(job_id)
-                        raise JobOwnershipError(
-                            f"worker {worker_id!r} no longer owns job {job_id}"
-                        )
-                    job = await session.get(OrmJob, str(uid))
-                else:
-                    job = await session.get(OrmJob, str(uid), with_for_update=True)
-                    if not job:
-                        raise KeyError(job_id)
-                    if worker_id is not None and job.worker_id != worker_id:
-                        raise JobOwnershipError(
-                            f"worker {worker_id!r} no longer owns job {job_id}"
-                        )
-
-                    job.status = JobStatus.COMPLETED.value
-                    job.completed_at = utc_now()
-                    job.result = result
-
-                job.history = job.history + [f"{utc_now().isoformat()} JobCompleted"]
-
-                await self._emit(
-                    session, "JobCompleted", str(job.id), job.tenant_id, f"Job {job.id} completed"
                 )
-                await session.flush()
-                await session.refresh(job)
-                return _orm_to_dict(job)
+                update_result = await session.execute(stmt)
+                if update_result.rowcount == 0:
+                    if await session.get(OrmJob, str(uid)) is None:
+                        raise KeyError(job_id)
+                    raise JobOwnershipError(
+                        f"worker {worker_id!r} no longer owns job {job_id}"
+                    )
+                job = await session.get(OrmJob, str(uid))
+            else:
+                job = await session.get(OrmJob, str(uid), with_for_update=True)
+                if not job:
+                    raise KeyError(job_id)
+                if worker_id is not None and job.worker_id != worker_id:
+                    raise JobOwnershipError(
+                        f"worker {worker_id!r} no longer owns job {job_id}"
+                    )
+
+                job.status = JobStatus.COMPLETED.value
+                job.completed_at = utc_now()
+                job.result = result
+
+            job.history = [*(job.history or []), f"{utc_now().isoformat()} JobCompleted"]
+
+            await self._emit(
+                session, "JobCompleted", str(job.id), job.tenant_id, f"Job {job.id} completed"
+            )
+            await session.flush()
+            await session.refresh(job)
+            return _orm_to_dict(job)
 
     async def fail_job(
         self,
@@ -352,98 +356,95 @@ class TaskMeshEngine:
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                if self._is_sqlite:
-                    job = await session.get(OrmJob, str(uid))
-                    if not job:
-                        raise KeyError(job_id)
-                else:
-                    job = await session.get(OrmJob, str(uid), with_for_update=True)
-                    if not job:
-                        raise KeyError(job_id)
+        async with AsyncSession(db_engine) as session, session.begin():
+            if self._is_sqlite:
+                job = await session.get(OrmJob, str(uid))
+                if not job:
+                    raise KeyError(job_id)
+            else:
+                job = await session.get(OrmJob, str(uid), with_for_update=True)
+                if not job:
+                    raise KeyError(job_id)
 
-                if worker_id is not None and job.worker_id != worker_id:
-                    raise JobOwnershipError(
-                        f"worker {worker_id!r} no longer owns job {job_id}"
-                    )
+            if worker_id is not None and job.worker_id != worker_id:
+                raise JobOwnershipError(
+                    f"worker {worker_id!r} no longer owns job {job_id}"
+                )
 
-                job.failure_reason = reason
-                job.retry_count += 1
+            job.failure_reason = reason
+            job.retry_count += 1
 
-                if not retryable:
-                    job.status = JobStatus.FAILED.value
-                    job.completed_at = utc_now()
-                    event_type = "JobFailedPermanently"
-                    message = f"Job {job.id} failed permanently: {reason}"
-                elif job.retry_count > job.max_retries:
-                    job.status = JobStatus.DEAD_LETTER.value
-                    job.completed_at = utc_now()
-                    event_type = "JobDeadLettered"
-                    message = f"Job {job.id} moved to DLQ after {job.retry_count} attempts"
-                else:
-                    job.status = JobStatus.SCHEDULED.value
-                    backoff_seconds = min(2**job.retry_count, 300)
-                    job.execute_at = utc_now() + timedelta(seconds=backoff_seconds)
-                    event_type = "JobRetryScheduled"
-                    message = (
-                        f"Job {job.id} retry {job.retry_count} scheduled in {backoff_seconds}s"
-                    )
+            if not retryable:
+                job.status = JobStatus.FAILED.value
+                job.completed_at = utc_now()
+                event_type = "JobFailedPermanently"
+                message = f"Job {job.id} failed permanently: {reason}"
+            elif job.retry_count > job.max_retries:
+                job.status = JobStatus.DEAD_LETTER.value
+                job.completed_at = utc_now()
+                event_type = "JobDeadLettered"
+                message = f"Job {job.id} moved to DLQ after {job.retry_count} attempts"
+            else:
+                job.status = JobStatus.SCHEDULED.value
+                backoff_seconds = min(2**job.retry_count, 300)
+                job.execute_at = utc_now() + timedelta(seconds=backoff_seconds)
+                event_type = "JobRetryScheduled"
+                message = (
+                    f"Job {job.id} retry {job.retry_count} scheduled in {backoff_seconds}s"
+                )
 
-                job.history = job.history + [f"{utc_now().isoformat()} {event_type}: {reason}"]
-                await self._emit(session, event_type, str(job.id), job.tenant_id, message)
-                await session.flush()
-                await session.refresh(job)
-                return _orm_to_dict(job)
+            job.history = [*(job.history or []), f"{utc_now().isoformat()} {event_type}: {reason}"]
+            await self._emit(session, event_type, str(job.id), job.tenant_id, message)
+            await session.flush()
+            await session.refresh(job)
+            return _orm_to_dict(job)
 
     async def replay_dead_letter(self, job_id: str) -> dict[str, Any]:
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                job = await session.get(OrmJob, str(uid))
-                if not job:
-                    raise KeyError(job_id)
-                if _status_value(job.status) != JobStatus.DEAD_LETTER.value:
-                    raise ValueError("job_not_in_dead_letter")
+        async with AsyncSession(db_engine) as session, session.begin():
+            job = await session.get(OrmJob, str(uid))
+            if not job:
+                raise KeyError(job_id)
+            if _status_value(job.status) != JobStatus.DEAD_LETTER.value:
+                raise ValueError("job_not_in_dead_letter")
 
-                job.status = JobStatus.PENDING.value
-                job.retry_count = 0
-                job.failure_reason = None
-                job.execute_at = None
-                job.completed_at = None
-                job.history = job.history + [f"{utc_now().isoformat()} JobReplayed"]
+            job.status = JobStatus.PENDING.value
+            job.retry_count = 0
+            job.failure_reason = None
+            job.execute_at = None
+            job.completed_at = None
+            job.history = [*(job.history or []), f"{utc_now().isoformat()} JobReplayed"]
 
-                await self._emit(
-                    session,
-                    "JobReplayed",
-                    str(job.id),
-                    job.tenant_id,
-                    f"Job {job.id} replayed from DLQ",
-                )
-                await session.flush()
-                await session.refresh(job)
-                return _orm_to_dict(job)
+            await self._emit(
+                session,
+                "JobReplayed",
+                str(job.id),
+                job.tenant_id,
+                f"Job {job.id} replayed from DLQ",
+            )
+            await session.flush()
+            await session.refresh(job)
+            return _orm_to_dict(job)
 
     async def heartbeat(self, request: WorkerHeartbeat) -> dict[str, Any]:
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                worker = await session.get(OrmWorker, request.worker_id)
-                if not worker:
-                    worker = OrmWorker(id=request.worker_id)
-                    session.add(worker)
+        async with AsyncSession(db_engine) as session, session.begin():
+            worker = await session.get(OrmWorker, request.worker_id)
+            if not worker:
+                worker = OrmWorker(id=request.worker_id)
+                session.add(worker)
 
-                worker.hostname = request.hostname
-                worker.cpu_usage = request.cpu_usage
-                worker.memory_usage = request.memory_usage
-                worker.active_jobs = request.active_jobs
-                worker.last_heartbeat = utc_now()
-                worker.status = "active"
+            worker.hostname = request.hostname
+            worker.cpu_usage = request.cpu_usage
+            worker.memory_usage = request.memory_usage
+            worker.active_jobs = request.active_jobs
+            worker.last_heartbeat = utc_now()
+            worker.status = "active"
 
-                await session.flush()
-                await session.refresh(worker)
-                return _orm_to_dict(worker)
+            await session.flush()
+            await session.refresh(worker)
+            return _orm_to_dict(worker)
 
     async def requeue_expired_leases(self, lease_seconds: int) -> int:
         """Return jobs stuck in ``running`` to ``pending`` after a lost worker.
@@ -453,39 +454,37 @@ class TaskMeshEngine:
         eligible again once the lease is older than ``lease_seconds``.
         """
         cutoff = utc_now() - timedelta(seconds=lease_seconds)
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                stmt = (
-                    update(OrmJob)
-                    .where(
-                        OrmJob.status == JobStatus.RUNNING.value,
-                        OrmJob.started_at < cutoff,
-                    )
-                    .values(
-                        status=JobStatus.PENDING.value,
-                        worker_id=None,
-                        started_at=None,
-                    )
+        async with AsyncSession(db_engine) as session, session.begin():
+            stmt = (
+                update(OrmJob)
+                .where(
+                    OrmJob.status == JobStatus.RUNNING.value,
+                    OrmJob.started_at < cutoff,
                 )
-                result = await session.execute(stmt)
-                requeued = result.rowcount or 0
-                if requeued:
-                    logger.warning("Requeued %s job(s) with expired leases", requeued)
-                return requeued
+                .values(
+                    status=JobStatus.PENDING.value,
+                    worker_id=None,
+                    started_at=None,
+                )
+            )
+            result = await session.execute(stmt)
+            requeued = result.rowcount or 0
+            if requeued:
+                logger.warning("Requeued %s job(s) with expired leases", requeued)
+            return requeued
 
     async def release_due_jobs(self) -> int:
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                stmt = (
-                    update(OrmJob)
-                    .where(
-                        OrmJob.status == JobStatus.SCHEDULED.value,
-                        OrmJob.execute_at <= utc_now(),
-                    )
-                    .values(status=JobStatus.PENDING.value)
+        async with AsyncSession(db_engine) as session, session.begin():
+            stmt = (
+                update(OrmJob)
+                .where(
+                    OrmJob.status == JobStatus.SCHEDULED.value,
+                    OrmJob.execute_at <= utc_now(),
                 )
-                result = await session.execute(stmt)
-                return result.rowcount
+                .values(status=JobStatus.PENDING.value)
+            )
+            result = await session.execute(stmt)
+            return result.rowcount
 
     async def metrics(self) -> Metrics:
         async with AsyncSession(db_engine) as session:
@@ -528,39 +527,37 @@ class TaskMeshEngine:
         self, job_id: str, worker_id: str | None = None
     ) -> dict[str, Any] | None:
         """Lease a specific job by ID (used by worker /jobs/{id}/lease endpoint)."""
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                job = await session.get(OrmJob, job_id)
-                if not job or _status_value(job.status) not in (
-                    JobStatus.PENDING.value,
-                    JobStatus.SCHEDULED.value,
-                ):
-                    return None
-                job.status = JobStatus.RUNNING.value
-                job.worker_id = worker_id or "unknown"
-                job.started_at = utc_now()
-                job.history = job.history + [f"{utc_now().isoformat()} JobLeased"]
-                await self._emit(
-                    session,
-                    "JobLeased",
-                    str(job.id),
-                    job.tenant_id,
-                    f"Job {job.id} leased by {worker_id}",
-                )
-                await session.flush()
-                await session.refresh(job)
-                return _orm_to_dict(job)
+        async with AsyncSession(db_engine) as session, session.begin():
+            job = await session.get(OrmJob, job_id)
+            if not job or _status_value(job.status) not in (
+                JobStatus.PENDING.value,
+                JobStatus.SCHEDULED.value,
+            ):
+                return None
+            job.status = JobStatus.RUNNING.value
+            job.worker_id = worker_id or "unknown"
+            job.started_at = utc_now()
+            job.history = [*(job.history or []), f"{utc_now().isoformat()} JobLeased"]
+            await self._emit(
+                session,
+                "JobLeased",
+                str(job.id),
+                job.tenant_id,
+                f"Job {job.id} leased by {worker_id}",
+            )
+            await session.flush()
+            await session.refresh(job)
+            return _orm_to_dict(job)
 
     async def delete_job(self, job_id: str) -> None:
         """Delete a job by ID."""
         uid = _safe_uuid(job_id)
         if not uid:
             return
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                job = await session.get(OrmJob, str(uid))
-                if job:
-                    await session.delete(job)
+        async with AsyncSession(db_engine) as session, session.begin():
+            job = await session.get(OrmJob, str(uid))
+            if job:
+                await session.delete(job)
 
     async def list_workers(self, active_only: bool = False) -> list[dict[str, Any]]:
         """List all workers, optionally filtering to active ones (heartbeat within 5 min)."""
@@ -575,19 +572,18 @@ class TaskMeshEngine:
 
     async def heartbeat_expired_workers(self, timeout_minutes: int = 1) -> int:
         """Mark workers as inactive if they haven't sent a heartbeat within timeout_minutes."""
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                inactive_limit = utc_now() - timedelta(minutes=timeout_minutes)
-                stmt = (
-                    update(OrmWorker)
-                    .where(
-                        OrmWorker.last_heartbeat < inactive_limit,
-                        OrmWorker.status != "inactive",
-                    )
-                    .values(status="inactive")
+        async with AsyncSession(db_engine) as session, session.begin():
+            inactive_limit = utc_now() - timedelta(minutes=timeout_minutes)
+            stmt = (
+                update(OrmWorker)
+                .where(
+                    OrmWorker.last_heartbeat < inactive_limit,
+                    OrmWorker.status != "inactive",
                 )
-                result = await session.execute(stmt)
-                return result.rowcount
+                .values(status="inactive")
+            )
+            result = await session.execute(stmt)
+            return result.rowcount
 
     async def list_events(
         self,
@@ -616,24 +612,23 @@ class TaskMeshEngine:
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
-        async with AsyncSession(db_engine) as session:
-            async with session.begin():
-                job = await session.get(OrmJob, str(uid))
-                if not job:
-                    raise KeyError(job_id)
-                if _status_value(job.status) not in (
-                    JobStatus.PENDING.value,
-                    JobStatus.SCHEDULED.value,
-                ):
-                    raise ValueError("Only pending or scheduled jobs can be cancelled")
-                job.status = JobStatus.CANCELED.value
-                job.history = job.history + [f"{utc_now().isoformat()} JobCancelled"]
-                await self._emit(
-                    session, "JobCancelled", str(job.id), job.tenant_id, f"Job {job.id} cancelled"
-                )
-                await session.flush()
-                await session.refresh(job)
-                return _orm_to_dict(job)
+        async with AsyncSession(db_engine) as session, session.begin():
+            job = await session.get(OrmJob, str(uid))
+            if not job:
+                raise KeyError(job_id)
+            if _status_value(job.status) not in (
+                JobStatus.PENDING.value,
+                JobStatus.SCHEDULED.value,
+            ):
+                raise ValueError("Only pending or scheduled jobs can be cancelled")
+            job.status = JobStatus.CANCELED.value
+            job.history = [*(job.history or []), f"{utc_now().isoformat()} JobCancelled"]
+            await self._emit(
+                session, "JobCancelled", str(job.id), job.tenant_id, f"Job {job.id} cancelled"
+            )
+            await session.flush()
+            await session.refresh(job)
+            return _orm_to_dict(job)
 
     async def analytics_time_series(self, hours: int = 24) -> list[dict[str, Any]]:
         """Return time-series data for analytics charts.
@@ -665,7 +660,7 @@ class TaskMeshEngine:
             for row in rows:
                 created = row.created_at
                 if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
+                    created = created.replace(tzinfo=UTC)
                 hour_key = created.strftime("%Y-%m-%dT%H:00:00")
                 if hour_key not in hourly:
                     hourly[hour_key] = {
@@ -721,7 +716,8 @@ class TaskMeshEngine:
         try:
             await redis_client.ping()
             return True
-        except Exception:
+        except (RedisError, OSError) as exc:
+            logger.debug("Redis health check failed: %s", exc)
             return False
 
 

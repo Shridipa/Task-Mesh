@@ -24,8 +24,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./taskmesh.db"
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
-DEFAULT_DEV_WORKER_SECRET = "dev-insecure-worker-secret"
-DEFAULT_DEV_JWT_SECRET = "dev-insecure-jwt-secret-change-me"
+DEFAULT_DEV_WORKER_SECRET = "dev-insecure-worker-secret"  # noqa: S105 - rejected in production
+DEFAULT_DEV_JWT_SECRET = "dev-insecure-jwt-secret-change-me"  # noqa: S105 - rejected in production
 DEV_ADMIN_API_KEY = "dev-admin-key"
 
 # Async SQLAlchemy drivers the application can actually use. Anything else is a

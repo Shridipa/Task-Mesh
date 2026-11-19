@@ -16,9 +16,10 @@ defined in src/taskmesh/db/models.py:
 7. Add unique constraint on (tenant_id, idempotency_key) for jobs
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "20240626000004"

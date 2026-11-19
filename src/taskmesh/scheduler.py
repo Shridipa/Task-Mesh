@@ -11,6 +11,7 @@ is available, and falls back to simple polling without locking when it is not
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import uuid
@@ -105,8 +106,8 @@ async def run_scheduler(stop_event: asyncio.Event | None = None) -> None:
                     continue
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - keep the scheduler alive
-                logger.error("Scheduler error: %s", exc, exc_info=True)
+            except Exception as exc:
+                logger.exception("Scheduler error: %s", exc)
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=ERROR_BACKOFF_SECONDS)
                 except TimeoutError:
@@ -131,12 +132,8 @@ async def main() -> None:
     for sig in (getattr(os, "SIGTERM", None), getattr(os, "SIGINT", None)):
         if sig is None:  # pragma: no cover - platform dependent
             continue
-        try:
+        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
             loop.add_signal_handler(sig, stop_event.set)
-        except (NotImplementedError, RuntimeError, ValueError):
-            # Windows, or a non-main thread; the loop still exits via
-            # cancellation, so this is not fatal.
-            pass
     await run_scheduler(stop_event)
 
 

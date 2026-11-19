@@ -10,4 +10,3 @@ class Base(DeclarativeBase):
     Used by Alembic for migrations and by the application for metadata.
     """
 
-    pass

@@ -22,11 +22,10 @@ async def list_events(
     _: Principal = Depends(require_read),
 ):
     """List events with optional filtering."""
-    events = await engine.list_events(
+    return await engine.list_events(
         job_id=job_id,
         tenant_id=tenant_id,
         event_type=event_type,
         limit=limit,
         offset=offset,
     )
-    return events

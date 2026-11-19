@@ -51,7 +51,7 @@ class FakeRedis:
         self.published.append((channel, message))
         return 1
 
-    def pipeline(self, transaction: bool = True) -> _FakePipeline:  # noqa: ARG002
+    def pipeline(self, transaction: bool = True) -> _FakePipeline:
         return _FakePipeline()
 
 

@@ -10,7 +10,8 @@ SQLite.
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from redis.asyncio import Redis
 from sqlalchemy import text
@@ -23,8 +24,10 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool, StaticPool
 
 from ..config import get_settings, redact_url
-from ..db import Base
-from ..db import models  # noqa: F401  (registers the ORM models on Base.metadata)
+from ..db import (
+    Base,
+    models,  # noqa: F401  (registers the ORM models on Base.metadata)
+)
 
 logger = logging.getLogger(__name__)
 

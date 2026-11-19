@@ -85,8 +85,8 @@ async def lifespan(app: FastAPI):
             await coro
         except asyncio.CancelledError:
             logger.info("%s cancelled (shutting down)", name)
-        except Exception as exc:  # noqa: BLE001 - background loops may fail for many reasons
-            logger.error("%s terminated unexpectedly: %s", name, exc, exc_info=True)
+        except Exception:
+            logger.exception("%s terminated unexpectedly", name)
 
     tasks: list[asyncio.Task] = []
     # Local development runs everything in one process. Container deployments
@@ -143,13 +143,16 @@ async def request_context(request: Request, call_next):
     started = time.perf_counter()
     try:
         declared_length = request.headers.get("content-length")
-        if declared_length and declared_length.isdigit():
-            if int(declared_length) > settings.max_request_bytes:
-                return JSONResponse(
-                    status_code=413,
-                    content={"detail": "Request body too large"},
-                    headers={**SECURITY_HEADERS, "X-Request-ID": request_id},
-                )
+        if (
+            declared_length
+            and declared_length.isdigit()
+            and int(declared_length) > settings.max_request_bytes
+        ):
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request body too large"},
+                headers={**SECURITY_HEADERS, "X-Request-ID": request_id},
+            )
 
         response = await call_next(request)
         duration_ms = round((time.perf_counter() - started) * 1000, 1)

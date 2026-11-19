@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from taskmesh.config import (
-    ConfigError,
     DEV_ADMIN_API_KEY,
+    ConfigError,
     load_settings,
     redact_url,
     reset_settings_cache,
