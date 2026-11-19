@@ -127,7 +127,7 @@ Public demo routes (no credentials, per-client rate limited):
 | `POST` | `/analysis/jobs` | Submit `{"task": "json.validate"}` or `{"task": "csv.analyze"}` with the document in `content` |
 | `GET` | `/analysis/jobs/{job_id}` | Status of that analysis job, including `result` once completed |
 
-Administrative and monitoring routes (header-based roles):
+Administrative and monitoring routes (signed-in tokens, see §6):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -147,13 +147,71 @@ Administrative and monitoring routes (header-based roles):
 | `GET` | `/metrics/prometheus` | Prometheus exposition format |
 | `GET`/`POST` | `/scheduler/*` | Scheduler status, pause/resume, run-now |
 | `GET` | `/analytics/timeseries` | Hourly job counts |
+| `POST` | `/auth/token` | Exchange an API key for a short-lived access token |
+| `GET` | `/auth/me` | Identity, role and tenant of the current token |
+| `GET` | `/ready` | Readiness probe (database and Redis status) |
 
-Access is self-asserted through headers (`X-Role: admin|developer|viewer`), and
-worker-only routes additionally require `X-Worker-Token`. The public `/text` and
-`/analysis` routes need no header so a visitor can try the demos. Interactive docs live at
-`/docs`.
+The public `/text` and `/analysis` routes need no credentials so a visitor can
+try the live demos; everything else requires a token. Interactive docs live at
+`/docs` and the OpenAPI schema at `/openapi.json`.
 
-## 6. What the scheduler does
+## 6. Authentication and authorization
+
+The API never trusts a client-supplied role. Access works like this:
+
+1. An operator configures long-lived API keys in `AUTH_API_KEYS`, as
+   `key:role:tenant` triples (`admin`, `developer` or `viewer`).
+2. The frontend (or a script) posts a key to `POST /auth/token` and receives a
+   short-lived HS256 JWT signed with `AUTH_JWT_SECRET`, plus its role, tenant and
+   expiry. Keys are compared in constant time.
+3. Every protected request carries `Authorization: Bearer <token>`. The token's
+   signature, `exp`, `iss` and `aud` are verified before the role or tenant is
+   used. A tampered or expired token is rejected with `401`.
+
+Roles are enforced per route: reads need `viewer` or better, writes need
+`developer` or better, administration (replay, cancel, delete, worker
+maintenance, scheduler control) needs `admin`. `developer` and `viewer` tokens
+are scoped to their own tenant: they see and create jobs for that tenant only,
+and asking for another job id returns `404` rather than `403`, so ids cannot be
+probed.
+
+```bash
+curl -s -X POST http://localhost:8000/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"api_key":"<your key>"}'
+# {"access_token":"<jwt>","token_type":"bearer","role":"developer","tenant":"acme","expires_in":3600}
+
+curl -s http://localhost:8000/jobs/ -H "Authorization: Bearer <jwt>"
+```
+
+Workers are not users. They present `X-Worker-Token: $WORKER_SECRET` (compared in
+constant time) and their `X-Worker-Id` when they lease, heartbeat, complete or
+fail a job. Worker routes are not reachable with a user token.
+
+`/health` is always public. `/metrics/prometheus` is public only when
+`METRICS_PUBLIC=true`, which is intended for a Prometheus scraper on an internal
+network; with the default Compose stack the API port is not published at all.
+
+## 7. CORS, request limits and rate limiting
+
+- `CORS_ORIGINS` is a comma-separated allowlist. In production a wildcard is
+  rejected at startup: the app refuses to boot with `CORS_ORIGINS=*`.
+- Request bodies are capped at `MAX_REQUEST_BYTES` (default 2 MiB) and oversized
+  requests get `413` before they are parsed. Each workload additionally enforces
+  its own character limit.
+- The public demo routes share a per-client sliding-window limiter
+  (`RATE_LIMIT_SUBMISSIONS` per `RATE_LIMIT_WINDOW_SECONDS`, keyed by
+  `X-Forwarded-For` when present). Exceeding it returns `429`. The limiter is
+  in-process and bounded in memory: run one API replica, or move the limiter to
+  Redis, if you scale out.
+- Unhandled errors return a generic `500` with a request id; the traceback is
+  logged, never returned.
+- Responses carry `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer` and `Cache-Control: no-store`; every request is
+  tagged with `X-Request-Id`, which is also included in error responses so a
+  user-facing failure can be matched to a server log line.
+
+## 8. What the scheduler does
 
 `src/taskmesh/scheduler.py` runs every second. It promotes `scheduled` jobs whose
 `execute_at` has passed to `pending`, and marks workers inactive when their
@@ -161,7 +219,7 @@ heartbeat is older than a minute. With Redis available it takes a distributed
 lock (`scheduler_lock`, `SET NX EX 5`) so only one scheduler acts at a time;
 without Redis it runs in single-process mode.
 
-## 7. What a worker does
+## 9. What a worker does
 
 `src/taskmesh/worker.py` sends a heartbeat (so it appears in the console), then
 leases the highest-priority pending job, runs the handler registered for its job
@@ -179,7 +237,7 @@ The API process starts a scheduler and a worker in its lifespan, so a single
 `uvicorn` process is already a working system. You can also run a worker as its
 own process to add capacity.
 
-## 8. Running the backend
+## 10. Running the backend
 
 ```bash
 python -m venv .venv
@@ -194,9 +252,19 @@ uvicorn taskmesh.main:app --reload --port 8000
 - Health: `curl http://localhost:8000/health`
 
 With no `DATABASE_URL` the app uses SQLite (`./test.db`) and creates its tables
-on startup. Alembic migrations live in `alembic/` (`alembic upgrade head`).
+on startup. For PostgreSQL, set the URL and apply the migrations once:
 
-## 9. Running an extra worker
+```bash
+export DATABASE_URL='postgresql+asyncpg://taskmesh:secret@localhost:5432/taskmesh'
+alembic upgrade head      # PostgreSQL only: Alembic refuses to run against SQLite
+alembic check             # fails if the models and migrations have drifted apart
+```
+
+Migrations are the supported way to create a PostgreSQL schema; automatic table
+creation (`AUTO_CREATE_SCHEMA`) is for development and tests only and is refused
+in production.
+
+## 11. Running an extra worker
 
 ```bash
 source .venv/bin/activate
@@ -206,7 +274,7 @@ python -m taskmesh.worker
 Set `WORKER_ID` to give it a readable name. Workers need the same
 `DATABASE_URL` as the API.
 
-## 10. Running the frontend
+## 12. Running the frontend
 
 ```bash
 cd frontend
@@ -217,23 +285,38 @@ npm run dev
 Open http://localhost:5173. Vite proxies `/api` to `http://127.0.0.1:8000`, so
 keep the backend running. Use `VITE_API_BASE_URL` to point at a different API.
 
-## 11. Required environment variables and services
+## 13. Required environment variables and services
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./test.db` | `postgresql+asyncpg://user:pass@host/db` for PostgreSQL |
-| `REDIS_URL` | `redis://localhost:6379/0` | Optional: distributed scheduler lock and rate limiting |
-| `WORKER_SECRET` | `taskmesh_secret` | Token for worker-only routes — change it in production |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `ENVIRONMENT` | `development` | `production` enables strict validation (see below) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./test.db` | Used verbatim. `postgresql+asyncpg://user:pass@host/db` for PostgreSQL |
+| `REDIS_URL` | `redis://localhost:6379/0` | Optional: scheduler lock and live log fan-out |
+| `AUTH_JWT_SECRET` | dev-only default | Signs access tokens; 32+ characters, required in production |
+| `AUTH_API_KEYS` | dev keys in development | `key:role:tenant,...` — the only way to obtain a token |
+| `WORKER_SECRET` | required | Shared secret for worker-only routes |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowlist; `*` is refused in production |
+| `RATE_LIMIT_SUBMISSIONS` / `RATE_LIMIT_WINDOW_SECONDS` | `10` / `60` | Public demo limiter |
+| `MAX_REQUEST_BYTES` | `2097152` | Body size cap |
+| `METRICS_PUBLIC` | `false` | Serve `/metrics/prometheus` without a token |
+| `LOG_FORMAT` / `LOG_LEVEL` | `text` / `INFO` | `json` for container logs |
 | `WORKER_ID` | hostname | Name shown for the worker |
 | `VITE_API_BASE_URL` | `/api` | Frontend API base URL |
 
-Redis is optional; without it the scheduler runs without the distributed lock
-and the rate limiter allows requests. PostgreSQL is optional; the demo runs on
-SQLite out of the box. `docker-compose.yml` provides API, Redis, PostgreSQL,
-Prometheus and Grafana if you want the full stack.
+`.env.example` documents every variable with the production values.
 
-## 12. Submitting a text-processing task
+**Production strictness.** When `ENVIRONMENT=production` the process refuses to
+start if `AUTH_JWT_SECRET` is shorter than 32 characters or still a development
+default, if `WORKER_SECRET` is missing, if `CORS_ORIGINS` is empty or `*`, or if
+`AUTO_CREATE_SCHEMA=true`. There is no development API key in production, so
+`AUTH_API_KEYS` must be set. Database URLs are never rewritten: a PostgreSQL URL
+is used as PostgreSQL.
+
+Redis is optional; without it the scheduler runs without the distributed lock
+and log fan-out degrades to no-op. PostgreSQL is optional for the demo but is
+what the Compose stack and the migration path use.
+
+## 14. Submitting a text-processing task
 
 From the website: open the dashboard, paste text into **Try TaskMesh Yourself**
 and press **Submit task**. The panel shows the real job ID, the real status
@@ -265,7 +348,7 @@ curl -s -X POST http://localhost:8000/analysis/jobs \
 curl -s http://localhost:8000/analysis/jobs/<job-id>
 ```
 
-## 13. Verifying that the worker actually executed it
+## 15. Verifying that the worker actually executed it
 
 ```bash
 curl -s http://localhost:8000/text/jobs/<job-id>
@@ -303,18 +386,89 @@ sqlite3 test.db "select id, status, worker_id, result from jobs order by created
 If no worker is running, the job honestly stays `pending` — the console shows
 "Waiting in queue" with no invented progress.
 
-## 14. Tests
+## 16. Docker Compose deployment
+
+The Compose stack runs PostgreSQL, Redis, the API, a separate worker, the
+scheduler, the built React frontend behind nginx, Prometheus and Grafana. Only
+the frontend port (`FRONTEND_PORT`, default 8080) is published; PostgreSQL,
+Redis and the API stay on the internal network.
+
+```bash
+cp .env.example .env                 # then replace every CHANGE_ME value
+docker compose build
+docker compose up -d
+docker compose ps                    # every service should be healthy
+```
+
+Then, once:
+
+```bash
+docker compose exec api alembic upgrade head
+```
+
+- Console: http://localhost:8080 — pick an API key from `AUTH_API_KEYS` and
+  sign in under Settings to see the management pages.
+- API (inside the network): `http://api:8000`, health at `/health`, readiness
+  (database + Redis) at `/ready`.
+- Grafana: `http://localhost:3000` when uncommented in `docker-compose.yml`.
+
+Health checks are real: the API container reports `/ready`, the worker and
+scheduler containers run `python -m taskmesh.liveness`, which fails when the
+process stops refreshing its liveness file, so a wedged worker is restarted
+instead of looking idle-and-healthy. PostgreSQL uses `pg_isready`, and Redis
+uses `redis-cli ping`.
+
+Logs: `docker compose logs -f api worker`. Set `LOG_FORMAT=json` (the default in
+Compose) for one JSON object per line, including the job id, task type and
+duration where relevant.
+
+Upgrade and rollback:
+
+```bash
+docker compose pull && docker compose build
+docker compose exec api alembic upgrade head
+docker compose up -d --no-deps api worker scheduler frontend
+```
+
+Data lives in the `pgdata` volume and survives `docker compose down`. Never run
+`docker compose down -v` unless you intend to delete the database. For backups:
+
+```bash
+docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > taskmesh-$(date +%F).sql
+```
+
+Shut down gracefully with `docker compose down`; the API, worker and scheduler
+handle `SIGTERM` and finish the job they are holding.
+
+**Before exposing this to the internet:** set real values for
+`POSTGRES_PASSWORD`, `AUTH_JWT_SECRET` (32+ random characters), `WORKER_SECRET`,
+`AUTH_API_KEYS` and `GF_SECURITY_ADMIN_PASSWORD`; set `CORS_ORIGINS` to your
+frontend origin; keep `METRICS_PUBLIC=false` unless a scraper needs it; put
+TLS and a reverse proxy in front of the frontend; and make sure the API port is
+not published. `docker compose config` fails fast when a required value is
+missing.
+
+## 17. Tests
 
 ```bash
 pip install -e ".[dev]"
-pytest                                  # backend, includes the end-to-end worker test
+pytest --cov=taskmesh --cov-report=term # 122 tests on SQLite, 87% coverage
 ruff check .                            # lint
 
+# The same suite against a real PostgreSQL (migrations are exercised too)
+export TEST_DATABASE_URL='postgresql+asyncpg://taskmesh:secret@localhost:5432/taskmesh'
+alembic upgrade head && alembic check
+pytest                                  # 128 tests
+
 cd frontend
+npm test -- --run                       # component tests
 npm run lint
-npm run build                           # TypeScript + production build
-npm test                                # component tests
+npx tsc -b --noEmit
+npm run build                           # production build
 ```
+
+The suite runs without Redis: the limiter, scheduler lock and log fan-out use
+in-process fallbacks, and the Redis code paths are covered by unit tests.
 
 `tests/test_text_demo.py` covers the counting rules (including Unicode and
 whitespace normalization), input validation, result persistence, the retry path
@@ -330,7 +484,7 @@ analysis API, and real submit → worker → completed runs for both workloads.
 `frontend/src/features/analysis/AnalysisDemo.test.tsx` covers the analysis form,
 both result panels, the failure state and URL restore.
 
-## 15. Project layout
+## 18. Project layout
 
 ```
 src/taskmesh/
@@ -345,16 +499,43 @@ src/taskmesh/
   db/models.py           SQLAlchemy ORM (jobs include a nullable result JSON)
   api/routes/text.py     public text submission + status endpoints
   api/routes/analysis.py public JSON/CSV submission + status endpoints
-  api/rate_limit.py      shared per-client sliding-window limiter
+  api/auth.py            token issuing/verification, roles, tenant scoping
+  api/routes/auth.py     POST /auth/token, GET /auth/me
+  config.py              environment parsing, production validation, URL redaction
+  logging_config.py      JSON/text logs with request and job context
+  liveness.py            worker/scheduler liveness files used by healthchecks
   api/routes/*.py        jobs, workers, metrics, events, logs, analytics, scheduler
 frontend/src/
   pages/OverviewPage.tsx        explanation, live stats, flow, demo
   features/text/TextDemo.tsx    text form, lifecycle, result
   features/analysis/AnalysisDemo.tsx  JSON/CSV form and result panels
-alembic/versions/              schema migrations (latest: job result column)
+alembic/versions/              schema migrations (latest: schema matches models)
 ```
 
-## 16. Known limitations
+## 19. Known limitations
+
+- The public demo routes (`/text/jobs`, `/analysis/jobs` and their status
+  endpoints) are intentionally unauthenticated and rate limited per client. The
+  limiter is per-process, so behind several API replicas each replica enforces
+  its own budget.
+- Job execution is at-least-once, not exactly-once. A worker whose lease expires
+  while it is still running can lose the job; the engine rejects a completion
+  from a worker that no longer owns it, but a handler with external side effects
+  could still run twice.
+- Handlers are CPU-light and run inside the worker process. There is no per-job
+  timeout, so a pathological document could occupy a worker for a while.
+- Three job types have handlers: `text.process`, `json.validate` and
+  `csv.analyze`. Any other job type fails honestly through the retry/dead-letter
+  path instead of pretending to succeed.
+- Input limits are 10,000 characters (text), 100,000 (JSON) and 200,000 (CSV).
+  Documents are pasted into the form; there is no file upload.
+- Invalid JSON/CSV ends as `failed` rather than `dead_letter`, because retrying
+  identical input cannot succeed.
+- Isolation is by tenant claim in the token, not by database row-level security.
+  A bug in a query could cross tenants; the tests cover the current routes, not a
+  formal guarantee.
+- Alembic migrations are PostgreSQL-only by design. SQLite (development and the
+  fast test run) creates its schema from the ORM models instead.
 
 - Access control is header-based (`X-Role`), not authenticated users — see the
   TODO in `src/taskmesh/api/auth.py`.
