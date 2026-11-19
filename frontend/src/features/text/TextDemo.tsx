@@ -13,7 +13,45 @@ import { formatDateTime } from "@/utils/format";
 
 const MAX_CHARACTERS = 10_000;
 const STORAGE_KEY = "taskmesh-text-demo";
+const JOB_PARAM = "job";
 const TERMINAL_STATUSES = new Set(["completed", "failed", "dead_letter", "canceled"]);
+
+function readStoredJob(): { jobId?: string; text?: string } | null {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    return stored ? (JSON.parse(stored) as { jobId?: string; text?: string }) : null;
+  } catch {
+    // Storage can be unavailable (sandboxed iframe); the URL still carries the job id.
+    return null;
+  }
+}
+
+function storeJob(jobId: string, text: string) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ jobId, text }));
+  } catch {
+    // Ignore storage failures: the URL keeps the task recoverable.
+  }
+}
+
+function clearStoredJob() {
+  try {
+    window.localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Nothing to clean up when storage is unavailable.
+  }
+}
+
+function jobIdFromUrl(): string | null {
+  return new URLSearchParams(window.location.search).get(JOB_PARAM);
+}
+
+function setJobInUrl(jobId: string | null) {
+  const url = new URL(window.location.href);
+  if (jobId) url.searchParams.set(JOB_PARAM, jobId);
+  else url.searchParams.delete(JOB_PARAM);
+  window.history.replaceState(null, "", url.toString());
+}
 
 type StepState = "pending" | "active" | "done" | "failed";
 
@@ -31,16 +69,13 @@ export function TextDemo() {
   const [formError, setFormError] = useState<string | null>(null);
 
   // Restore the last submitted task so a page refresh keeps showing its result.
+  // The URL is authoritative; localStorage is a convenience fallback.
   useEffect(() => {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (!stored) return;
-    try {
-      const parsed = JSON.parse(stored) as { jobId?: string; text?: string };
-      if (parsed.jobId) setJobId(parsed.jobId);
-      if (typeof parsed.text === "string") setText(parsed.text);
-    } catch {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
+    const fromUrl = jobIdFromUrl();
+    const parsed = readStoredJob();
+    const restoredId = fromUrl ?? parsed?.jobId;
+    if (restoredId) setJobId(restoredId);
+    if (!fromUrl && typeof parsed?.text === "string") setText(parsed.text);
   }, []);
 
   const jobQuery = useQuery<TextJob, ApiError>({
@@ -59,7 +94,8 @@ export function TextDemo() {
     onSuccess: (created, submitted) => {
       setFormError(null);
       setJobId(created.id);
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ jobId: created.id, text: submitted }));
+      setJobInUrl(created.id);
+      storeJob(created.id, submitted);
       queryClient.setQueryData(["text-job", created.id], created);
       void queryClient.invalidateQueries({ queryKey: ["dashboard-metrics"] });
     },
@@ -70,6 +106,14 @@ export function TextDemo() {
   const job = jobId ? jobQuery.data ?? null : null;
   const status = job?.status;
   const result = job?.result ?? null;
+
+  // When the page was restored from the URL, show the submitted text again.
+  useEffect(() => {
+    const original = job?.payload?.text;
+    if (typeof original === "string" && original) {
+      setText((current) => (current ? current : original));
+    }
+  }, [job]);
 
   useEffect(() => {
     if (job && TERMINAL_STATUSES.has(job.status)) {
@@ -143,7 +187,8 @@ export function TextDemo() {
     setJobId(null);
     setText("");
     setFormError(null);
-    window.localStorage.removeItem(STORAGE_KEY);
+    setJobInUrl(null);
+    clearStoredJob();
   };
 
   return (

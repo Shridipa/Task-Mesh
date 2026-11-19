@@ -186,7 +186,9 @@ Prometheus and Grafana if you want the full stack.
 
 From the website: open the dashboard, paste text into **Try TaskMesh Yourself**
 and press **Submit task**. The panel shows the real job ID, the real status
-changes and the worker's result.
+changes and the worker's result. The page URL records the job id
+(`/?job=<job-id>`), so refreshing — or opening that link again — fetches the
+stored job and result from the API.
 
 From the command line:
 
@@ -218,7 +220,7 @@ written by the worker, not by the API:
   "completed_at": "2024-06-26T10:00:01Z",
   "result": {
     "words": 8,
-    "characters": 57,
+    "characters": 50,
     "sentences": 2,
     "lines": 1,
     "cleaned_text": "Hello world. TaskMesh runs this in the background!"
@@ -246,12 +248,15 @@ ruff check .                            # lint
 cd frontend
 npm run lint
 npm run build                           # TypeScript + production build
-npm test                                # component test
+npm test                                # component tests
 ```
 
 `tests/test_text_demo.py` covers the counting rules (including Unicode and
 whitespace normalization), input validation, result persistence, the retry path
 and a real submit → worker → completed → read-back cycle.
+`frontend/src/features/text/TextDemo.test.tsx` covers the form validation, the
+real job id and statuses, the rendered result, API errors, URL/storage restore
+and that polling stops once the job is finished.
 
 ## 15. Project layout
 
