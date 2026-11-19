@@ -4,8 +4,9 @@ TaskMesh is a background task processing platform. Instead of making a user wait
 while work is performed inside the request, it stores the work as a **job** in a
 queue and lets **background workers** execute it independently.
 
-The repository ships one working workload — **text processing** — so you can see
-the whole pipeline move: submit → queue → worker → result → stored → displayed.
+The repository ships three working workloads — **text processing**, **JSON
+validation** and **CSV analysis** — so you can see the whole pipeline move:
+submit → queue → worker → result → stored → displayed.
 
 ---
 
@@ -53,7 +54,12 @@ GET /text/jobs/{id} ──► the console polls until the job is finished, then 
 Nothing is simulated: the numbers come from the worker's handler, and they are
 read back from the database afterwards.
 
-## 4. The text-processing demo
+## 4. The demo workloads
+
+All three workloads use the same pipeline and differ only in the handler the
+worker runs.
+
+### 4.1 Text processing (`text.process`)
 
 `text.process` computes these values **from the cleaned text**:
 
@@ -71,6 +77,45 @@ processed as text — never executed as code.
 
 Counting is deterministic: the same input always produces the same result.
 
+### 4.2 JSON validation (`json.validate`)
+
+`json.validate` parses the document with Python's strict JSON decoder (`NaN`
+and `Infinity` are rejected because they are not valid JSON) and returns:
+
+| Value | Rule |
+| --- | --- |
+| `formatted` | the document re-serialised with 2-space indentation |
+| `root_type` | `object`, `array`, `string`, `number`, `boolean` or `null` |
+| `counts` | objects, arrays, keys, strings, numbers, booleans and nulls found anywhere in the document |
+| `max_depth` | nesting depth of the deepest value |
+| `size` | length of the submitted document |
+
+Invalid JSON (a syntax error, single quotes, a trailing comma, missing braces
+or brackets, `NaN`, …) is a permanent failure: the job ends as `failed` with a
+reason such as `Invalid JSON at line 4, column 1: Expecting property name
+enclosed in double quotes`. It is not retried and never reported as completed.
+Input must be 1–100,000 characters and Unicode is preserved.
+
+### 4.3 CSV analysis (`csv.analyze`)
+
+`csv.analyze` reads the document with Python's strict CSV reader, so quoted
+values, commas inside quotes, doubled quotes (`""`) and newlines inside quoted
+fields all behave like a spreadsheet export. The first row is the header.
+
+| Value | Rule |
+| --- | --- |
+| `rows`, `columns` | data rows (header excluded) and column count |
+| `column_names` | trimmed header names; blank names become `column_N`, duplicates get a `_2` suffix |
+| `missing_values` | empty or whitespace-only cells, per column and in total |
+| `numeric_columns`, `statistics` | columns whose every non-missing value parses as a number, with count, mean, median, min and max |
+| `duplicate_rows` | data rows identical to an earlier row |
+| `ragged_rows` | rows whose field count differs from the header (short rows are padded, extra fields are kept and reported) |
+| `preview` | the first five rows as objects |
+
+Unparseable documents (for example an unterminated quoted field) fail the job
+permanently with `Invalid CSV: …`. Input must be 1–200,000 characters. A header
+without data rows is a valid, empty table.
+
 ## 5. API
 
 Public demo routes (no credentials, per-client rate limited):
@@ -79,6 +124,8 @@ Public demo routes (no credentials, per-client rate limited):
 | --- | --- | --- |
 | `POST` | `/text/jobs` | Submit `{"text": "..."}`; returns the created job |
 | `GET` | `/text/jobs/{job_id}` | Status of that text job, including `result` once completed |
+| `POST` | `/analysis/jobs` | Submit `{"task": "json.validate"}` or `{"task": "csv.analyze"}` with the document in `content` |
+| `GET` | `/analysis/jobs/{job_id}` | Status of that analysis job, including `result` once completed |
 
 Administrative and monitoring routes (header-based roles):
 
@@ -102,8 +149,8 @@ Administrative and monitoring routes (header-based roles):
 | `GET` | `/analytics/timeseries` | Hourly job counts |
 
 Access is self-asserted through headers (`X-Role: admin|developer|viewer`), and
-worker-only routes additionally require `X-Worker-Token`. The public `/text`
-routes need no header so a visitor can try the demo. Interactive docs live at
+worker-only routes additionally require `X-Worker-Token`. The public `/text` and
+`/analysis` routes need no header so a visitor can try the demos. Interactive docs live at
 `/docs`.
 
 ## 6. What the scheduler does
@@ -123,6 +170,10 @@ type (`src/taskmesh/tasks.py`), and stores either the result
 are retried with backoff `min(2**retry_count, 300)` seconds up to `max_retries`,
 then dead-lettered. A job type with no handler fails with
 `no handler is registered for job type '...'`.
+
+Payload errors (`JobInputError`: empty input, invalid JSON, unparseable CSV) skip
+the retry path — `engine.fail_job(..., retryable=False)` marks the job `failed`
+immediately, because retrying identical input cannot succeed.
 
 The API process starts a scheduler and a worker in its lifespan, so a single
 `uvicorn` process is already a working system. You can also run a worker as its
@@ -200,6 +251,20 @@ curl -s -X POST http://localhost:8000/text/jobs \
 # → {"id":"<job-id>","job_type":"text.process","status":"pending", ...}
 ```
 
+The analysis tasks use the same flow:
+
+```bash
+curl -s -X POST http://localhost:8000/analysis/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"json.validate","content":"{\"name\":\"TaskMesh\"}"}'
+
+curl -s -X POST http://localhost:8000/analysis/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"csv.analyze","content":"name,score\nAda,90\nGrace,80"}'
+
+curl -s http://localhost:8000/analysis/jobs/<job-id>
+```
+
 ## 13. Verifying that the worker actually executed it
 
 ```bash
@@ -258,21 +323,34 @@ and a real submit → worker → completed → read-back cycle.
 real job id and statuses, the rendered result, API errors, URL/storage restore
 and that polling stops once the job is finished.
 
+`tests/test_analysis_tasks.py` covers the JSON and CSV rules (root types,
+Unicode, invalid documents with line and column, quoted CSV fields, missing
+values, duplicates, statistics), dispatch for all three job types, the public
+analysis API, and real submit → worker → completed runs for both workloads.
+`frontend/src/features/analysis/AnalysisDemo.test.tsx` covers the analysis form,
+both result panels, the failure state and URL restore.
+
 ## 15. Project layout
 
 ```
 src/taskmesh/
-  text_processing.py     the demo workload (counting rules)
+  text_processing.py     text.process workload (counting rules)
+  json_validation.py     json.validate workload (structure + formatted output)
+  csv_analysis.py        csv.analyze workload (shape, missing values, statistics)
+  errors.py              JobInputError: deterministic payload failures
   tasks.py               job_type → handler dispatch used by workers
   worker.py              heartbeat, lease, execute, complete/fail
   scheduler.py           due-job promotion, worker expiry, Redis lock
   engine.py              single source of truth for jobs, workers, events
   db/models.py           SQLAlchemy ORM (jobs include a nullable result JSON)
-  api/routes/text.py     public submission + status endpoints
+  api/routes/text.py     public text submission + status endpoints
+  api/routes/analysis.py public JSON/CSV submission + status endpoints
+  api/rate_limit.py      shared per-client sliding-window limiter
   api/routes/*.py        jobs, workers, metrics, events, logs, analytics, scheduler
 frontend/src/
   pages/OverviewPage.tsx        explanation, live stats, flow, demo
-  features/text/TextDemo.tsx    submission form, lifecycle, result
+  features/text/TextDemo.tsx    text form, lifecycle, result
+  features/analysis/AnalysisDemo.tsx  JSON/CSV form and result panels
 alembic/versions/              schema migrations (latest: job result column)
 ```
 
@@ -282,5 +360,10 @@ alembic/versions/              schema migrations (latest: job result column)
   TODO in `src/taskmesh/api/auth.py`.
 - When `DATABASE_URL` points at PostgreSQL the API currently falls back to a
   local SQLite file, so the one-day demo runs on SQLite. Redis is optional.
-- Only `text.process` has a handler. Any other job type fails honestly through
-  the retry/dead-letter path instead of pretending to succeed.
+- Three job types have handlers: `text.process`, `json.validate` and
+  `csv.analyze`. Any other job type fails honestly through the
+  retry/dead-letter path instead of pretending to succeed.
+- Input limits are 10,000 characters (text), 100,000 (JSON) and 200,000 (CSV).
+  Documents are pasted into the form; there is no file upload.
+- Invalid JSON/CSV ends as `failed` rather than `dead_letter`, because retrying
+  identical input cannot succeed.

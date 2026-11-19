@@ -312,7 +312,9 @@ class TaskMeshEngine:
                 await session.refresh(job)
                 return _orm_to_dict(job)
 
-    async def fail_job(self, job_id: str, reason: str) -> dict[str, Any]:
+    async def fail_job(
+        self, job_id: str, reason: str, retryable: bool = True
+    ) -> dict[str, Any]:
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
@@ -330,7 +332,12 @@ class TaskMeshEngine:
                 job.failure_reason = reason
                 job.retry_count += 1
 
-                if job.retry_count > job.max_retries:
+                if not retryable:
+                    job.status = JobStatus.FAILED.value
+                    job.completed_at = utc_now()
+                    event_type = "JobFailedPermanently"
+                    message = f"Job {job.id} failed permanently: {reason}"
+                elif job.retry_count > job.max_retries:
                     job.status = JobStatus.DEAD_LETTER.value
                     job.completed_at = utc_now()
                     event_type = "JobDeadLettered"

@@ -13,6 +13,7 @@ import os
 import socket
 
 from .engine import engine
+from .errors import JobInputError
 from .models import WorkerHeartbeat
 from .tasks import execute_job
 
@@ -78,6 +79,11 @@ async def main() -> None:
 
             try:
                 result = execute_job(job["job_type"], job.get("payload") or {})
+            except JobInputError as exc:
+                # Invalid payloads fail the same way every time, so retrying is pointless.
+                current_job_id = None
+                logger.warning("Job %s rejected: %s", job_id, exc)
+                await engine.fail_job(job_id, str(exc), retryable=False)
             except Exception as exc:  # noqa: BLE001 - any handler error is a job failure
                 current_job_id = None
                 logger.warning("Job %s failed: %s", job_id, exc)

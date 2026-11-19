@@ -20,6 +20,7 @@ from .auth import (
 )
 from .dependencies import create_schema
 from .routes import (
+    analysis,
     analytics,
     dashboard,
     events,
@@ -109,6 +110,7 @@ app.include_router(events.router, prefix="/events", tags=["events"])
 app.include_router(scheduler_control.router, prefix="/scheduler", tags=["scheduler"])
 app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 app.include_router(text.router, prefix="/text", tags=["text"])
+app.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
 
 

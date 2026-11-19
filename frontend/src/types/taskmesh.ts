@@ -39,6 +39,49 @@ export interface TextProcessResult {
 
 export type TextJob = Omit<Job, "result"> & { result: TextProcessResult | null };
 
+export type AnalysisTask = "json.validate" | "csv.analyze";
+
+export interface JsonValidationResult {
+  valid: boolean;
+  formatted: string;
+  root_type: string;
+  counts: {
+    objects: number;
+    arrays: number;
+    keys: number;
+    strings: number;
+    numbers: number;
+    booleans: number;
+    nulls: number;
+  };
+  max_depth: number;
+  size: number;
+}
+
+export interface ColumnStatistics {
+  count: number;
+  mean: number;
+  median: number;
+  min: number;
+  max: number;
+}
+
+export interface CsvAnalysisResult {
+  rows: number;
+  columns: number;
+  column_names: string[];
+  missing_values: { total: number; by_column: Record<string, number> };
+  numeric_columns: string[];
+  statistics: Record<string, ColumnStatistics>;
+  duplicate_rows: number;
+  ragged_rows: number;
+  preview: Record<string, string>[];
+}
+
+export type AnalysisResult = JsonValidationResult | CsvAnalysisResult;
+
+export type AnalysisJob = Omit<Job, "result"> & { result: AnalysisResult | null };
+
 export interface JobCreateInput {
   job_type: string;
   payload: Record<string, unknown>;

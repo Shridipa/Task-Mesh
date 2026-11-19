@@ -4,6 +4,7 @@ import { ArrowRight, CheckCircle2, Clock, Cpu } from "lucide-react";
 import { getDashboardMetrics } from "@/api/metrics";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AnalysisDemo } from "@/features/analysis/AnalysisDemo";
 import { TextDemo } from "@/features/text/TextDemo";
 
 const FLOW = [
@@ -84,6 +85,8 @@ export function OverviewPage() {
       </Card>
 
       <TextDemo />
+
+      <AnalysisDemo />
 
       <p className="text-xs text-muted-foreground">
         Detailed monitoring is available in the sidebar: Jobs, Workers, Scheduler, Dead Letter Queue, Analytics, Events

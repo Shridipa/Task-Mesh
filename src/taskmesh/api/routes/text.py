@@ -9,8 +9,6 @@ can be read through this public surface.
 
 from __future__ import annotations
 
-import time
-from collections import deque
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -19,44 +17,20 @@ from pydantic import BaseModel, Field
 from ...engine import engine
 from ...models import JobCreate
 from ...text_processing import MAX_TEXT_LENGTH, TEXT_JOB_TYPE
+from ..rate_limit import SlidingWindowLimiter, client_key
 
 router = APIRouter()
 
 SUBMISSIONS_PER_WINDOW = 10
 SUBMIT_WINDOW_SECONDS = 60.0
-MAX_TRACKED_CLIENTS = 1024
 
-_submissions: dict[str, deque[float]] = {}
+_limiter = SlidingWindowLimiter(
+    limit=SUBMISSIONS_PER_WINDOW, window_seconds=SUBMIT_WINDOW_SECONDS
+)
 
 
 class TextJobRequest(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
-
-
-def _client_key(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _check_rate_limit(key: str) -> None:
-    """Allow a small number of submissions per client per minute."""
-    now = time.monotonic()
-
-    if len(_submissions) > MAX_TRACKED_CLIENTS:
-        for stale in [client for client, window in _submissions.items() if not window]:
-            del _submissions[stale]
-
-    window = _submissions.setdefault(key, deque())
-    while window and now - window[0] > SUBMIT_WINDOW_SECONDS:
-        window.popleft()
-    if len(window) >= SUBMISSIONS_PER_WINDOW:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many tasks submitted. Please wait a minute and try again.",
-        )
-    window.append(now)
 
 
 @router.post("/jobs", status_code=status.HTTP_201_CREATED, response_model=dict[str, Any])
@@ -65,7 +39,10 @@ async def submit_text_job(payload: TextJobRequest, request: Request):
     if not payload.text.strip():
         raise HTTPException(status_code=422, detail="Text must not be empty.")
 
-    _check_rate_limit(_client_key(request))
+    _limiter.check(
+        client_key(request),
+        "Too many tasks submitted. Please wait a minute and try again.",
+    )
 
     try:
         job = await engine.create_job(
