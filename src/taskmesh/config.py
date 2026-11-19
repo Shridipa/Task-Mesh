@@ -245,7 +245,12 @@ def _load_from_env() -> Settings:
         raise ConfigError("AUTH_JWT_SECRET must be at least 32 characters in production")
 
     api_keys = dict(_parse_api_keys(_env("AUTH_API_KEYS"), environment))
-    if not api_keys and not is_production:
+    if not api_keys:
+        if is_production:
+            raise ConfigError(
+                "AUTH_API_KEYS must configure at least one key in production; "
+                "without a key nobody can obtain a token"
+            )
         # Local development convenience: a documented, loudly-logged dev key.
         api_keys[DEV_ADMIN_API_KEY] = ("admin", "default")
 
@@ -256,6 +261,11 @@ def _load_from_env() -> Settings:
 
     default_auto_schema = not is_production
     auto_create_schema = _env_bool("AUTO_CREATE_SCHEMA", default_auto_schema)
+    if is_production and auto_create_schema:
+        raise ConfigError(
+            "AUTO_CREATE_SCHEMA must be false in production; apply migrations with "
+            "'alembic upgrade head' instead"
+        )
 
     log_format = (_env("LOG_FORMAT", "text") or "text").lower()
     if log_format not in {"text", "json"}:

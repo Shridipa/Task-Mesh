@@ -184,6 +184,25 @@ def test_production_does_not_auto_create_schema():
     assert settings.auto_create_schema is False
 
 
+def test_production_rejects_explicit_schema_creation_and_empty_key_lists():
+    base = {
+        "ENVIRONMENT": "production",
+        "DATABASE_URL": "postgresql+asyncpg://u:p@db:5432/taskmesh",
+        "WORKER_SECRET": "x" * 32,
+        "AUTH_JWT_SECRET": "y" * 32,
+        "AUTH_API_KEYS": "production-admin-key:admin:default",
+        "CORS_ORIGINS": "https://app.example.com",
+    }
+
+    with pytest.raises(ConfigError, match="AUTO_CREATE_SCHEMA"):
+        _settings(**base, AUTO_CREATE_SCHEMA="true")
+
+    # An entry list that parses to nothing must not quietly leave the API
+    # without a single usable key.
+    with pytest.raises(ConfigError, match="AUTH_API_KEYS"):
+        _settings(**{**base, "AUTH_API_KEYS": ","})
+
+
 def test_invalid_boolean_and_log_format_are_rejected():
     with pytest.raises(ConfigError, match="boolean"):
         _settings(ENVIRONMENT="test", EMBEDDED_WORKER="maybe")
