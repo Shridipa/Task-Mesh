@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnalysisDemo } from "@/features/analysis/AnalysisDemo";
 import { TextDemo } from "@/features/text/TextDemo";
+import { useAuthStore } from "@/store/auth-store";
 
 const FLOW = [
   { title: "Submit a task", detail: "The visitor sends text to the API." },
@@ -16,9 +17,13 @@ const FLOW = [
 ];
 
 export function OverviewPage() {
+  const signedIn = useAuthStore((state) => Boolean(state.token));
   const metrics = useQuery({
     queryKey: ["dashboard-metrics"],
     queryFn: getDashboardMetrics,
+    // The dashboard summary is a protected endpoint; asking for it without a
+    // session only produces 401s, so wait until the visitor has signed in.
+    enabled: signedIn,
     refetchInterval: 5_000
   });
 
@@ -56,6 +61,11 @@ export function OverviewPage() {
           icon={CheckCircle2}
         />
       </div>
+      {!signedIn ? (
+        <p className="text-sm text-muted-foreground">
+          Sign in under Settings to see live queue statistics. The demo tasks below work without signing in.
+        </p>
+      ) : null}
       {metrics.isError ? (
         <p className="text-sm text-destructive" role="alert">
           Live statistics are unavailable: {metrics.error.message}
