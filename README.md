@@ -468,7 +468,9 @@ npm run build                           # production build
 ```
 
 The suite runs without Redis: the limiter, scheduler lock and log fan-out use
-in-process fallbacks, and the Redis code paths are covered by unit tests.
+in-process fallbacks, and the Redis code paths are covered by unit tests. Point
+`TEST_DATABASE_URL` at a database no worker is polling: a live worker would
+consume the jobs the tests are inspecting.
 
 `tests/test_text_demo.py` covers the counting rules (including Unicode and
 whitespace normalization), input validation, result persistence, the retry path

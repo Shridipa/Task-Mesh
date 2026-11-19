@@ -50,3 +50,7 @@ def time_since(path: str) -> float:
         return time.time() - os.path.getmtime(path)
     except OSError:
         return float("inf")
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess
+    raise SystemExit(main())
