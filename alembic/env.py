@@ -1,66 +1,57 @@
 """Alembic environment configuration.
 
-This file sets up the migration context so that ``alembic`` can locate the
-SQLAlchemy ``MetaData`` object that contains our model definitions.  The
-``Base`` class (and thus ``Base.metadata``) lives in ``src.taskmesh.db.base``.
+The migration context uses ``Base.metadata`` from ``src.taskmesh.db`` after
+importing every ORM model, so ``alembic revision --autogenerate`` and
+``alembic check`` compare against the real schema. The database URL always
+comes from ``DATABASE_URL``; the async driver is converted to its synchronous
+equivalent by :func:`taskmesh.config.to_sync_url`.
 """
 
-from __future__ import with_statement
+from __future__ import annotations
+
 import os
+import sys
 from logging.config import fileConfig
 
-from sqlalchemy import pool
 from alembic import context
+from sqlalchemy import create_engine, pool
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
+# Ensure the repository root (and therefore ``src``) is importable.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from taskmesh.config import ConfigError, redact_url, to_sync_url  # noqa: E402
+from taskmesh.db import Base  # noqa: E402
+from taskmesh.db import models  # noqa: E402,F401  (registers the ORM models)
+
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# ----------------------------------------------------------------------
-# add your model's MetaData object here for 'autogenerate' support
-# ----------------------------------------------------------------------
-# Import the Base metadata from the project's engine module.
-# The import path must be importable when alembic runs (i.e. the project
-# root is on PYTHONPATH).  We also make ``DATABASE_URL`` overridable via an
-# environment variable – this matches the Docker container's runtime config.
-
-sys_path_added = False
-if "PYTHONPATH" not in os.environ:
-    # Ensure the repository root is on the path when alembic runs.
-    import sys
-
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    sys_path_added = True
-
-# Import all models to ensure metadata is populated
-from src.taskmesh.db import Base  # noqa: E402
-
 target_metadata = Base.metadata
 
-# ----------------------------------------------------------------------
-# other configuration settings
-# ----------------------------------------------------------------------
+
+def _database_url() -> str:
+    """Return the configured URL, failing clearly when it is missing."""
+    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    if not url or url == "driver://user:pass@localhost/dbname":
+        raise ConfigError(
+            "DATABASE_URL is not set. Export it (for example "
+            "postgresql+asyncpg://user:pass@host:5432/taskmesh) before running Alembic."
+        )
+    return url
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    In this mode, Alembic does not need a DB connection; it just emits the
-    SQL statements to the script output.  The URL is taken from the
-    ``DATABASE_URL`` environment variable (or from the ``alembic.ini``
-    placeholder if not set).
-    """
-    url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    """Emit SQL instead of executing it (``alembic upgrade head --sql``)."""
     context.configure(
-        url=url,
+        url=to_sync_url(_database_url()),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        compare_type=True,
     )
 
     with context.begin_transaction():
@@ -68,27 +59,31 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
+    """Run migrations against a synchronous connection."""
+    raw_url = _database_url()
+    if raw_url.split("://", 1)[0].startswith("sqlite"):
+        raise ConfigError(
+            "The TaskMesh migration history targets PostgreSQL. SQLite is a "
+            "development/test backend and gets its schema from the ORM "
+            "(AUTO_CREATE_SCHEMA=true or 'pytest'), not from Alembic."
+        )
 
-    We use a *synchronous* PostgreSQL engine for Alembic because the async
-    driver (``+asyncpg``) cannot be used in the migration context. If the
-    ``DATABASE_URL`` contains ``+asyncpg`` we replace it with ``+psycopg2``.
-    """
-    # Transform async URL to a sync one for Alembic
-    raw_url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
-    sync_url = raw_url.replace("+asyncpg", "+psycopg2") if raw_url else None
-    if not sync_url:
-        raise RuntimeError("DATABASE_URL not set for Alembic migrations")
-
-    from sqlalchemy import create_engine
+    sync_url = to_sync_url(raw_url)
+    print(f"[alembic] connecting to {redact_url(sync_url)}")
 
     connectable = create_engine(sync_url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
 
         with context.begin_transaction():
             context.run_migrations()
+
+    connectable.dispose()
 
 
 if context.is_offline_mode():

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
-from taskmesh.api.dependencies import create_schema
 from taskmesh.csv_analysis import CSV_JOB_TYPE, MAX_CSV_LENGTH, analyze_csv
 from taskmesh.errors import JobInputError
 from taskmesh.json_validation import JSON_JOB_TYPE, MAX_JSON_LENGTH, validate_json
@@ -28,14 +26,8 @@ JSON_DOCUMENT = """{
 CSV_DOCUMENT = 'name,score,note\nAda,90,"likes, commas"\nGrace,80,first\nAda,90,"likes, commas"\nLinus,,third\n'
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _schema():
-    """Create the tables once for the engine-level tests in this module."""
-    asyncio.run(create_schema())
-
-
 @pytest.fixture(scope="module")
-def client():
+def client(clean_queue):
     with TestClient(app) as test_client:
         yield test_client
 

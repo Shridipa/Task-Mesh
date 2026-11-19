@@ -1,109 +1,141 @@
 """Async scheduler for TaskMesh.
 
-Releases scheduled jobs when their execute_at time arrives.
-Uses Redis distributed locking for single-active-scheduler semantics when Redis is available.
-Falls back to simple polling without locking when Redis is unavailable.
-Implements lease expiry, heartbeat, and crash recovery.
+Releases scheduled jobs when their ``execute_at`` time arrives and requeues jobs
+whose worker lease expired so a crashed worker cannot strand them forever.
+
+Uses a Redis distributed lock for single-active-scheduler semantics when Redis
+is available, and falls back to simple polling without locking when it is not
+(single-process development).
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
-import logging
 
 import redis.asyncio as redis
 
-from src.taskmesh.engine import engine
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+from .config import get_settings
+from .engine import engine
 
 logger = logging.getLogger(__name__)
 
-_redis_available: bool | None = None
+POLL_SECONDS = 1.0
+ERROR_BACKOFF_SECONDS = 5.0
+LOCK_TTL_SECONDS = 5
 
 
-async def _check_redis() -> bool:
-    """Check if Redis is reachable. Cache result to avoid hammering on each loop."""
-    global _redis_available
-    try:
-        await redis_client.ping()
-        _redis_available = True
+class _RedisState:
+    """Cached Redis availability, refreshed on every loop iteration."""
+
+    def __init__(self, client: redis.Redis) -> None:
+        self.client = client
+        self.available: bool | None = None
+
+    async def check(self) -> bool:
+        try:
+            await self.client.ping()
+        except Exception as exc:  # noqa: BLE001 - redis-py raises many error types
+            if self.available is not False:
+                logger.warning(
+                    "Redis unavailable (%s) — scheduler running without distributed locking",
+                    type(exc).__name__,
+                )
+            self.available = False
+            return False
+        self.available = True
         return True
-    except Exception:
-        if _redis_available is not False:
-            logger.warning("Redis unavailable — scheduler running without distributed locking")
-        _redis_available = False
-        return False
 
 
-async def _heartbeat_loop(scheduler_id: str, stop_event: asyncio.Event) -> None:
+async def _heartbeat_loop(state: _RedisState, scheduler_id: str, stop_event: asyncio.Event) -> None:
     """Periodically refresh the scheduler lock to signal liveness."""
     while not stop_event.is_set():
-        if _redis_available:
+        if state.available:
             try:
-                await redis_client.expire("scheduler_lock", 5)
-            except Exception:
-                pass
+                await state.client.expire("scheduler_lock", LOCK_TTL_SECONDS)
+            except Exception as exc:  # noqa: BLE001 - lock refresh is best effort
+                logger.debug("Scheduler lock refresh failed: %s", type(exc).__name__)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=2)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue
 
 
-async def main() -> None:
+async def run_scheduler(stop_event: asyncio.Event | None = None) -> None:
+    """Run one scheduler loop until ``stop_event`` is set."""
+    settings = get_settings()
     scheduler_id = str(uuid.uuid4())
-    logger.info(f"Starting scheduler {scheduler_id}")
+    stop_event = stop_event or asyncio.Event()
+    state = _RedisState(redis.from_url(settings.redis_url, decode_responses=True))
 
-    stop_event = asyncio.Event()
-
-    # Check Redis availability
-    await _check_redis()
-
-    # Start heartbeat task
-    heartbeat_task = asyncio.create_task(_heartbeat_loop(scheduler_id, stop_event))
+    logger.info("Scheduler starting", extra={"scheduler_id": scheduler_id})
+    await state.check()
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(state, scheduler_id, stop_event))
 
     try:
-        while True:
+        while not stop_event.is_set():
             try:
-                lock_acquired = False
-
-                if _redis_available:
-                    # Acquire distributed lock (only one scheduler runs release logic)
-                    lock_acquired = await redis_client.set(
-                        "scheduler_lock", scheduler_id, nx=True, ex=5
+                if state.available:
+                    lock_acquired = await state.client.set(
+                        "scheduler_lock", scheduler_id, nx=True, ex=LOCK_TTL_SECONDS
                     )
                 else:
-                    # No Redis: always run (single-process mode)
                     lock_acquired = True
 
                 if lock_acquired:
-                    # Release scheduled jobs whose execute_at has arrived
                     released = await engine.release_due_jobs()
-                    if released > 0:
-                        logger.info(f"Released {released} due jobs")
+                    if released:
+                        logger.info("Released %s due job(s)", released)
 
-                    # Mark workers as inactive if heartbeat expired
+                    requeued = await engine.requeue_expired_leases(settings.worker_lease_seconds)
+                    if requeued:
+                        logger.info("Requeued %s job(s) with expired leases", requeued)
+
                     expired_workers = await engine.heartbeat_expired_workers()
-                    if expired_workers > 0:
-                        logger.info(f"Marked {expired_workers} workers as inactive")
+                    if expired_workers:
+                        logger.info("Marked %s worker(s) inactive", expired_workers)
 
-                await asyncio.sleep(1)
-
-            except Exception as exc:
-                logger.error(f"Scheduler error: {exc}")
-                await asyncio.sleep(5)
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=POLL_SECONDS)
+                except TimeoutError:
+                    continue
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - keep the scheduler alive
+                logger.error("Scheduler error: %s", exc, exc_info=True)
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=ERROR_BACKOFF_SECONDS)
+                except TimeoutError:
+                    continue
     finally:
         stop_event.set()
-        await heartbeat_task
-        if _redis_available:
+        heartbeat_task.cancel()
+        await asyncio.gather(heartbeat_task, return_exceptions=True)
+        if state.available:
             try:
-                await redis_client.delete("scheduler_lock")
-            except Exception:
-                pass
+                await state.client.delete("scheduler_lock")
+            except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+                logger.debug("Scheduler lock release failed: %s", type(exc).__name__)
+        await state.client.aclose()
         logger.info("Scheduler shut down gracefully")
+
+
+async def main() -> None:
+    """Entrypoint used by ``python -m taskmesh.scheduler``."""
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (getattr(os, "SIGTERM", None), getattr(os, "SIGINT", None)):
+        if sig is None:  # pragma: no cover - platform dependent
+            continue
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, RuntimeError, ValueError):
+            # Windows, or a non-main thread; the loop still exits via
+            # cancellation, so this is not fatal.
+            pass
+    await run_scheduler(stop_event)
 
 
 if __name__ == "__main__":

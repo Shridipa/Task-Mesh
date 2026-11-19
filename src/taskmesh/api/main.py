@@ -18,7 +18,8 @@ from fastapi.openapi.utils import get_openapi
 from .auth import (
     require_worker_token as _require_worker_token,
 )
-from .dependencies import create_schema
+from ..config import get_settings, redact_url
+from .dependencies import create_schema, dispose_engine, dispose_redis
 from .routes import (
     analysis,
     analytics,
@@ -34,8 +35,10 @@ from .routes import (
 
 logger = logging.getLogger(__name__)
 
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
-WORKER_SECRET = os.getenv("WORKER_SECRET", "taskmesh_secret")
+settings = get_settings()
+
+CORS_ORIGINS = ",".join(settings.cors_origins)
+WORKER_SECRET = settings.worker_secret
 
 require_worker_token = _require_worker_token(WORKER_SECRET)
 
@@ -45,32 +48,51 @@ require_worker_token = _require_worker_token(WORKER_SECRET)
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Creating database schema...")
+    logger.info(
+        "Starting TaskMesh API",
+        extra={
+            "environment": settings.environment,
+            "database": redact_url(settings.database_url),
+            "embedded_worker": settings.embedded_worker,
+            "embedded_scheduler": settings.embedded_scheduler,
+        },
+    )
     await create_schema()
-    # Start background scheduler and worker loops
-    from ..scheduler import main as scheduler_main
-    from ..worker import main as worker_main
 
     async def _run_with_logging(name: str, coro):
         """Run a background coroutine and log any unexpected termination."""
         try:
             await coro
         except asyncio.CancelledError:
-            logger.info(f"{name} cancelled (shutting down)")
-        except Exception as exc:
-            logger.error(f"{name} terminated unexpectedly: {exc}", exc_info=True)
+            logger.info("%s cancelled (shutting down)", name)
+        except Exception as exc:  # noqa: BLE001 - background loops may fail for many reasons
+            logger.error("%s terminated unexpectedly: %s", name, exc, exc_info=True)
 
-    scheduler_task = asyncio.create_task(_run_with_logging("scheduler", scheduler_main()))
-    worker_task = asyncio.create_task(_run_with_logging("worker", worker_main()))
-    app.state.scheduler_task = scheduler_task
-    app.state.worker_task = worker_task
+    tasks: list[asyncio.Task] = []
+    # Local development runs everything in one process. Container deployments
+    # set EMBEDDED_WORKER/EMBEDDED_SCHEDULER=false and run dedicated services.
+    if settings.embedded_scheduler:
+        from ..scheduler import main as scheduler_main
+
+        scheduler_task = asyncio.create_task(_run_with_logging("scheduler", scheduler_main()))
+        app.state.scheduler_task = scheduler_task
+        tasks.append(scheduler_task)
+    if settings.embedded_worker:
+        from ..worker import main as worker_main
+
+        worker_task = asyncio.create_task(_run_with_logging("worker", worker_main()))
+        app.state.worker_task = worker_task
+        tasks.append(worker_task)
+
     try:
         yield
     finally:
-        # Cancel background tasks on shutdown
-        scheduler_task.cancel()
-        worker_task.cancel()
-        await asyncio.gather(scheduler_task, worker_task, return_exceptions=True)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await dispose_engine()
+        await dispose_redis()
         logger.info("Background tasks shut down")
 
 

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
-from taskmesh.api.dependencies import create_schema
 from taskmesh.engine import engine
 from taskmesh.main import app
 from taskmesh.models import JobCreate
@@ -26,14 +24,8 @@ DEV_HEADERS = {"X-Role": "developer"}
 SAMPLE = "Hello world. This is TaskMesh!\n\nWorkers run tasks?"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _schema():
-    """Create the tables once for the engine-level tests in this module."""
-    asyncio.run(create_schema())
-
-
 @pytest.fixture(scope="module")
-def client():
+def client(clean_queue):
     with TestClient(app) as test_client:
         yield test_client
 

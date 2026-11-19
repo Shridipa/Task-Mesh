@@ -12,10 +12,13 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .api.dependencies import engine as db_engine
+from .config import get_settings
 from .db.models import Job as OrmJob, Worker as OrmWorker, Event as OrmEvent
+from .errors import JobOwnershipError
 from .models import JobCreate, JobStatus, Metrics, WorkerHeartbeat, utc_now
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+settings = get_settings()
+REDIS_URL = settings.redis_url
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 logger = logging.getLogger(__name__)
@@ -80,8 +83,10 @@ class RateLimiter:
 class TaskMeshEngine:
     def __init__(self) -> None:
         self.rate_limiter = RateLimiter()
-        # Detect if we're using SQLite (doesn't support FOR UPDATE SKIP LOCKED)
-        self._is_sqlite = "sqlite" in (os.getenv("DATABASE_URL", "") or "")
+        # SQLite has no FOR UPDATE SKIP LOCKED, so it takes a separate path.
+        # Derive this from the live engine so it follows the real connection
+        # rather than a possibly stale environment variable.
+        self._is_sqlite = db_engine.url.get_backend_name() == "sqlite"
 
     async def _emit(
         self,
@@ -163,6 +168,10 @@ class TaskMeshEngine:
                     history=[f"{utc_now().isoformat()} JobCreated"],
                 )
                 session.add(job)
+                # Flush the job first: events reference jobs through a foreign
+                # key, and PostgreSQL rejects the event insert if the job row
+                # is not there yet.
+                await session.flush()
                 await self._emit(
                     session, "JobCreated", str(job.id), job.tenant_id, f"Job {job.id} accepted"
                 )
@@ -272,8 +281,15 @@ class TaskMeshEngine:
                 return _orm_to_dict(job)
 
     async def complete_job(
-        self, job_id: str, result: dict[str, Any] | None = None
+        self, job_id: str, result: dict[str, Any] | None = None, worker_id: str | None = None
     ) -> dict[str, Any]:
+        """Mark a job completed.
+
+        When ``worker_id`` is provided the write only happens if that worker
+        still holds the job, so a worker that lost its lease (for example after
+        the scheduler requeued an expired job) cannot overwrite another
+        worker's result.
+        """
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
@@ -281,9 +297,12 @@ class TaskMeshEngine:
             async with session.begin():
                 if self._is_sqlite:
                     # SQLite: simpler update without FOR UPDATE
+                    conditions = [OrmJob.id == str(uid)]
+                    if worker_id is not None:
+                        conditions.append(OrmJob.worker_id == worker_id)
                     stmt = (
                         update(OrmJob)
-                        .where(OrmJob.id == str(uid))
+                        .where(*conditions)
                         .values(
                             status=JobStatus.COMPLETED.value,
                             completed_at=utc_now(),
@@ -292,12 +311,20 @@ class TaskMeshEngine:
                     )
                     update_result = await session.execute(stmt)
                     if update_result.rowcount == 0:
-                        raise KeyError(job_id)
+                        if await session.get(OrmJob, str(uid)) is None:
+                            raise KeyError(job_id)
+                        raise JobOwnershipError(
+                            f"worker {worker_id!r} no longer owns job {job_id}"
+                        )
                     job = await session.get(OrmJob, str(uid))
                 else:
                     job = await session.get(OrmJob, str(uid), with_for_update=True)
                     if not job:
                         raise KeyError(job_id)
+                    if worker_id is not None and job.worker_id != worker_id:
+                        raise JobOwnershipError(
+                            f"worker {worker_id!r} no longer owns job {job_id}"
+                        )
 
                     job.status = JobStatus.COMPLETED.value
                     job.completed_at = utc_now()
@@ -313,8 +340,16 @@ class TaskMeshEngine:
                 return _orm_to_dict(job)
 
     async def fail_job(
-        self, job_id: str, reason: str, retryable: bool = True
+        self,
+        job_id: str,
+        reason: str,
+        retryable: bool = True,
+        worker_id: str | None = None,
     ) -> dict[str, Any]:
+        """Record a job failure.
+
+        ``worker_id`` enforces lease ownership exactly like ``complete_job``.
+        """
         uid = _safe_uuid(job_id)
         if not uid:
             raise KeyError(job_id)
@@ -328,6 +363,11 @@ class TaskMeshEngine:
                     job = await session.get(OrmJob, str(uid), with_for_update=True)
                     if not job:
                         raise KeyError(job_id)
+
+                if worker_id is not None and job.worker_id != worker_id:
+                    raise JobOwnershipError(
+                        f"worker {worker_id!r} no longer owns job {job_id}"
+                    )
 
                 job.failure_reason = reason
                 job.retry_count += 1
@@ -405,6 +445,34 @@ class TaskMeshEngine:
                 await session.flush()
                 await session.refresh(worker)
                 return _orm_to_dict(worker)
+
+    async def requeue_expired_leases(self, lease_seconds: int) -> int:
+        """Return jobs stuck in ``running`` to ``pending`` after a lost worker.
+
+        A worker that crashes between leasing and completing leaves its job in
+        ``running`` forever. The scheduler calls this so those jobs become
+        eligible again once the lease is older than ``lease_seconds``.
+        """
+        cutoff = utc_now() - timedelta(seconds=lease_seconds)
+        async with AsyncSession(db_engine) as session:
+            async with session.begin():
+                stmt = (
+                    update(OrmJob)
+                    .where(
+                        OrmJob.status == JobStatus.RUNNING.value,
+                        OrmJob.started_at < cutoff,
+                    )
+                    .values(
+                        status=JobStatus.PENDING.value,
+                        worker_id=None,
+                        started_at=None,
+                    )
+                )
+                result = await session.execute(stmt)
+                requeued = result.rowcount or 0
+                if requeued:
+                    logger.warning("Requeued %s job(s) with expired leases", requeued)
+                return requeued
 
     async def release_due_jobs(self) -> int:
         async with AsyncSession(db_engine) as session:
