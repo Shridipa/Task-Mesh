@@ -7,6 +7,7 @@ import pytest
 from taskmesh.config import (
     DEV_ADMIN_API_KEY,
     ConfigError,
+    asyncpg_connection,
     load_settings,
     redact_url,
     reset_settings_cache,
@@ -27,6 +28,8 @@ ENV_VARS = (
     "LOG_FORMAT",
     "EMBEDDED_WORKER",
     "EMBEDDED_SCHEDULER",
+    "DB_DISABLE_POOL",
+    "VERCEL",
 )
 
 
@@ -208,3 +211,51 @@ def test_invalid_boolean_and_log_format_are_rejected():
         _settings(ENVIRONMENT="test", EMBEDDED_WORKER="maybe")
     with pytest.raises(ConfigError, match="LOG_FORMAT"):
         _settings(ENVIRONMENT="test", LOG_FORMAT="xml")
+
+
+def test_managed_provider_url_is_translated_for_asyncpg_only():
+    provider_url = (
+        "postgresql+asyncpg://user:secret@ep-cool-name.eu-central-1.aws.neon.tech/taskmesh"
+        "?sslmode=require&channel_binding=require"
+    )
+
+    engine_url, connect_args = asyncpg_connection(provider_url)
+
+    assert engine_url == (
+        "postgresql+asyncpg://user:secret@ep-cool-name.eu-central-1.aws.neon.tech/taskmesh"
+    )
+    assert connect_args == {"ssl": "require"}
+    # The configured value itself is never rewritten: Alembic and logs keep it.
+    assert _settings(DATABASE_URL=provider_url, ENVIRONMENT="test").database_url == provider_url
+
+
+def test_asyncpg_connection_leaves_supported_urls_alone():
+    for url in (
+        "sqlite+aiosqlite:///./taskmesh.db",
+        "postgresql+asyncpg://u:p@db:5432/taskmesh",
+        "postgresql+asyncpg://u:p@db:5432/taskmesh?ssl=require",
+        "postgresql+asyncpg://u:p@db:5432/taskmesh?application_name=taskmesh",
+    ):
+        assert asyncpg_connection(url) == (url, {})
+
+
+def test_disable_pool_is_configurable_for_serverless_hosts():
+    assert _settings(ENVIRONMENT="test").db_disable_pool is False
+    assert _settings(ENVIRONMENT="test", DB_DISABLE_POOL="true").db_disable_pool is True
+
+
+def test_serverless_deployment_refuses_embedded_background_loops(monkeypatch):
+    from taskmesh.api.main import ensure_no_embedded_background_loops
+
+    monkeypatch.setenv("VERCEL", "1")
+    embedded = _settings(ENVIRONMENT="test", EMBEDDED_WORKER="true", EMBEDDED_SCHEDULER="true")
+    with pytest.raises(ConfigError, match="Vercel"):
+        ensure_no_embedded_background_loops(embedded)
+
+    separate = _settings(ENVIRONMENT="test", EMBEDDED_WORKER="false", EMBEDDED_SCHEDULER="false")
+    ensure_no_embedded_background_loops(separate)
+
+    # Outside a serverless function the single-process development mode stays.
+    monkeypatch.delenv("VERCEL")
+    ensure_no_embedded_background_loops(embedded)
+

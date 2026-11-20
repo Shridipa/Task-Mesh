@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool, StaticPool
 
-from ..config import get_settings, redact_url
+from ..config import asyncpg_connection, get_settings, redact_url
 from ..db import (
     Base,
     models,  # noqa: F401  (registers the ORM models on Base.metadata)
@@ -35,6 +35,10 @@ settings = get_settings()
 
 DATABASE_URL = settings.database_url
 REDIS_URL = settings.redis_url
+#: Driver-compatible URL plus explicit TLS arguments for the async engine only.
+#: ``DATABASE_URL`` itself stays verbatim so logs, Alembic and operators all
+#: see what was configured.
+ASYNC_DATABASE_URL, ASYNC_CONNECT_ARGS = asyncpg_connection(DATABASE_URL)
 
 
 def _engine_options() -> dict[str, Any]:
@@ -44,6 +48,13 @@ def _engine_options() -> dict[str, Any]:
         # Async drivers bind connections to the loop that opened them. The test
         # suite (and Starlette's TestClient) uses several loops, so tests run
         # without a pool: every checkout gets a connection in the caller's loop.
+        options["poolclass"] = NullPool
+        return options
+    if settings.db_disable_pool and not settings.is_sqlite:
+        # Serverless hosts (Vercel) run many short-lived instances. A pooled
+        # connection held by one instance is unusable to the next, and large
+        # pools exhaust a managed provider's connection limit; a connection
+        # per request is the safe default there.
         options["poolclass"] = NullPool
         return options
     if settings.is_sqlite:
@@ -62,7 +73,9 @@ def _engine_options() -> dict[str, Any]:
 
 
 #: Process-wide async engine. Logged redacted so credentials never leak.
-engine = create_async_engine(DATABASE_URL, **_engine_options())
+engine = create_async_engine(
+    ASYNC_DATABASE_URL, connect_args=ASYNC_CONNECT_ARGS, **_engine_options()
+)
 logger.debug("Database engine created for %s", redact_url(DATABASE_URL))
 
 AsyncSessionLocal = async_sessionmaker(

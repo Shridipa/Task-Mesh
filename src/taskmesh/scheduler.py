@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
+import signal
 import uuid
 
 import redis.asyncio as redis
@@ -21,6 +21,7 @@ import redis.asyncio as redis
 from .config import get_settings
 from .engine import engine
 from .liveness import touch_liveness
+from .logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,14 @@ async def run_scheduler(stop_event: asyncio.Event | None = None) -> None:
 
 async def main() -> None:
     """Entrypoint used by ``python -m taskmesh.scheduler``."""
+    # A standalone scheduler host has no API lifespan to configure logging.
+    configure_logging(service="taskmesh-scheduler")
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (getattr(os, "SIGTERM", None), getattr(os, "SIGINT", None)):
-        if sig is None:  # pragma: no cover - platform dependent
-            continue
+    # Signals live in the ``signal`` module (``os`` has none): the previous
+    # lookup silently returned None, so SIGTERM killed the scheduler without
+    # releasing its Redis lock or closing its connections.
+    for sig in (signal.SIGTERM, signal.SIGINT):
         with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
             loop.add_signal_handler(sig, stop_event.set)
     await run_scheduler(stop_event)

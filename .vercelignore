@@ -1,0 +1,14 @@
+# Only the API project uses this file (its root is the repository root).
+.venv/
+artifacts/
+frontend/
+infra/
+monitoring/
+tests/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+*.pyc
+.coverage
+test.db
+loadtest.js

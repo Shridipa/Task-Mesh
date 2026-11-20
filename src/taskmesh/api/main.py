@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -17,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 
-from ..config import get_settings, redact_url
+from ..config import ConfigError, Settings, get_settings, redact_url
 from ..logging_config import configure_logging, request_id_var
 from ..version import __version__
 from .dependencies import (
@@ -45,6 +46,24 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
+
+def ensure_no_embedded_background_loops(settings: Settings) -> None:
+    """Refuse to start the worker or scheduler inside a serverless function.
+
+    Vercel sets ``VERCEL`` for every deployment. A request-scoped function
+    cannot host a polling loop: it would be frozen, duplicated across
+    instances, and would execute jobs with no durability. Failing loudly at
+    startup is the only safe behaviour when the deployment forgot to run those
+    loops as separate services.
+    """
+    if os.getenv("VERCEL") and (settings.embedded_worker or settings.embedded_scheduler):
+        raise ConfigError(
+            "EMBEDDED_WORKER and EMBEDDED_SCHEDULER must both be false in a Vercel "
+            "Function. Run `python -m taskmesh.worker` and "
+            "`python -m taskmesh.scheduler` on a persistent host instead."
+        )
+
+
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -58,6 +77,7 @@ SECURITY_HEADERS = {
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    ensure_no_embedded_background_loops(settings)
     configure_logging()
     logger.info(
         "Starting TaskMesh API",

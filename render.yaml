@@ -1,0 +1,81 @@
+# Render Blueprint for the TaskMesh background services.
+#
+# The API and frontend run on Vercel; the worker and scheduler need a
+# persistent process, which Render worker services provide. Both services use
+# the same PostgreSQL database and Redis instance as the API.
+#
+# Create the services with: Render Dashboard → New → Blueprint → this
+# repository. Values marked `sync: false` are entered in the Render dashboard
+# and are never committed. `AUTH_JWT_SECRET`, `AUTH_API_KEYS` and `CORS_ORIGINS`
+# are required because TaskMesh validates the whole production configuration in
+# every process, not only in the API.
+services:
+  - type: worker
+    name: taskmesh-worker
+    runtime: python
+    plan: starter
+    buildCommand: pip install --no-cache-dir .
+    startCommand: python -m taskmesh.worker
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: ENVIRONMENT
+        value: production
+      - key: AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: EMBEDDED_WORKER
+        value: "false"
+      - key: EMBEDDED_SCHEDULER
+        value: "false"
+      - key: LOG_FORMAT
+        value: json
+      - key: DB_DISABLE_POOL
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: WORKER_SECRET
+        sync: false
+      - key: AUTH_JWT_SECRET
+        sync: false
+      - key: AUTH_API_KEYS
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+
+  - type: worker
+    name: taskmesh-scheduler
+    runtime: python
+    plan: starter
+    buildCommand: pip install --no-cache-dir .
+    startCommand: python -m taskmesh.scheduler
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: ENVIRONMENT
+        value: production
+      - key: AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: EMBEDDED_WORKER
+        value: "false"
+      - key: EMBEDDED_SCHEDULER
+        value: "false"
+      - key: LOG_FORMAT
+        value: json
+      - key: DB_DISABLE_POOL
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: WORKER_SECRET
+        sync: false
+      - key: AUTH_JWT_SECRET
+        sync: false
+      - key: AUTH_API_KEYS
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

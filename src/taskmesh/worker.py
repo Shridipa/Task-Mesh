@@ -29,6 +29,7 @@ from .config import get_settings
 from .engine import engine
 from .errors import JobInputError, JobOwnershipError
 from .liveness import touch_liveness
+from .logging_config import configure_logging
 from .models import WorkerHeartbeat
 from .tasks import UnsupportedJobType, execute_job
 
@@ -195,6 +196,9 @@ async def run_worker(
 
 async def main() -> None:
     """Entrypoint used by ``python -m taskmesh.worker``."""
+    # A standalone worker host (Render, a container) has no API lifespan to
+    # configure logging, so do it here before the first log line.
+    configure_logging(service="taskmesh-worker")
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 

@@ -20,7 +20,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./taskmesh.db"
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
@@ -78,6 +78,46 @@ def to_sync_url(url: str) -> str:
             f"Supported async drivers: {', '.join(SUPPORTED_ASYNC_SCHEMES)}"
         )
     return SYNC_DRIVER_MAP[scheme] + "://" + url.split("://", 1)[1]
+
+
+def asyncpg_connection(url: str) -> tuple[str, dict[str, str]]:
+    """Split an asyncpg URL into ``(engine_url, connect_args)``.
+
+    Managed PostgreSQL providers hand out URLs such as
+    ``...?sslmode=require&channel_binding=require``. asyncpg's ``connect()``
+    takes ``ssl=`` rather than ``sslmode=`` and has no channel-binding
+    parameter, so passing a provider URL through unchanged fails with
+    ``TypeError`` on the first connection.
+
+    The libpq-only options are removed from the URL SQLAlchemy parses and
+    returned as explicit connect arguments instead. That keeps ``engine.url``
+    free of parameters only asyncpg understands, while ``DATABASE_URL`` itself
+    is never rewritten: Alembic still sees the verbatim value through
+    :func:`to_sync_url`, where psycopg2 does understand ``sslmode``.
+    """
+    if not url.startswith("postgresql+asyncpg://"):
+        return url, {}
+    parts = urlsplit(url)
+    if not parts.query:
+        return url, {}
+    original = parse_qsl(parts.query, keep_blank_values=True)
+    kept: list[tuple[str, str]] = []
+    connect_args: dict[str, str] = {}
+    for key, value in original:
+        if key == "sslmode":
+            connect_args["ssl"] = value
+        elif key == "channel_binding":
+            # A libpq client-side policy asyncpg cannot express; TLS is still
+            # enforced by the translated ``ssl`` connect argument.
+            continue
+        else:
+            kept.append((key, value))
+    if kept == original and not connect_args:
+        return url, {}
+    clean_url = urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(kept), parts.fragment)
+    )
+    return clean_url, connect_args
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -171,6 +211,7 @@ class Settings:
     db_max_overflow: int
     db_pool_timeout: int
     db_pool_recycle: int
+    db_disable_pool: bool
     cors_origins: tuple[str, ...]
     worker_secret: str
     jwt_secret: str
@@ -280,6 +321,7 @@ def _load_from_env() -> Settings:
         db_max_overflow=_env_int("DB_MAX_OVERFLOW", 20),
         db_pool_timeout=_env_int("DB_POOL_TIMEOUT", 30, minimum=1),
         db_pool_recycle=_env_int("DB_POOL_RECYCLE", 1800, minimum=1),
+        db_disable_pool=_env_bool("DB_DISABLE_POOL", False),
         cors_origins=cors_origins,
         worker_secret=worker_secret,
         jwt_secret=jwt_secret,

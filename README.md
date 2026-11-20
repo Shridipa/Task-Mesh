@@ -299,6 +299,7 @@ keep the backend running. Use `VITE_API_BASE_URL` to point at a different API.
 | `RATE_LIMIT_SUBMISSIONS` / `RATE_LIMIT_WINDOW_SECONDS` | `10` / `60` | Public demo limiter |
 | `MAX_REQUEST_BYTES` | `2097152` | Body size cap |
 | `METRICS_PUBLIC` | `false` | Serve `/metrics/prometheus` without a token |
+| `DB_DISABLE_POOL` | `false` | One connection per request (`NullPool`); set `true` on serverless hosts |
 | `LOG_FORMAT` / `LOG_LEVEL` | `text` / `INFO` | `json` for container logs |
 | `WORKER_ID` | hostname | Name shown for the worker |
 | `VITE_API_BASE_URL` | `/api` | Frontend API base URL |
@@ -512,6 +513,11 @@ frontend/src/
   features/text/TextDemo.tsx    text form, lifecycle, result
   features/analysis/AnalysisDemo.tsx  JSON/CSV form and result panels
 alembic/versions/              schema migrations (latest: schema matches models)
+api/index.py                   Vercel Python entrypoint (imports the same FastAPI app)
+vercel.json                    Vercel API project: function duration and bundle filters
+render.yaml                    Render Blueprint for the worker and scheduler services
+frontend/vercel.json           Vercel SPA rewrite for client-side routes
+docs/deployment/vercel.md      Vercel + managed PostgreSQL + Render deployment guide
 ```
 
 ## 19. Known limitations
@@ -539,10 +545,6 @@ alembic/versions/              schema migrations (latest: schema matches models)
 - Alembic migrations are PostgreSQL-only by design. SQLite (development and the
   fast test run) creates its schema from the ORM models instead.
 
-- Access control is header-based (`X-Role`), not authenticated users — see the
-  TODO in `src/taskmesh/api/auth.py`.
-- When `DATABASE_URL` points at PostgreSQL the API currently falls back to a
-  local SQLite file, so the one-day demo runs on SQLite. Redis is optional.
 - Three job types have handlers: `text.process`, `json.validate` and
   `csv.analyze`. Any other job type fails honestly through the
   retry/dead-letter path instead of pretending to succeed.
@@ -550,3 +552,28 @@ alembic/versions/              schema migrations (latest: schema matches models)
   Documents are pasted into the form; there is no file upload.
 - Invalid JSON/CSV ends as `failed` rather than `dead_letter`, because retrying
   identical input cannot succeed.
+
+## 20. Deploying on Vercel with managed PostgreSQL
+
+The repository is prepared for a split deployment:
+
+- **Vercel** hosts the React frontend (Root Directory `frontend`) and the
+  FastAPI app (Root Directory `/`, entrypoint `api/index.py`).
+- **A managed PostgreSQL** database (Neon, Supabase or any PostgreSQL 13+)
+  stores jobs, workers and events; apply the schema with `alembic upgrade head`
+  before deploying.
+- **Render** runs the persistent `taskmesh-worker` and `taskmesh-scheduler`
+  processes from `render.yaml`. Vercel Functions cannot host polling loops, so
+  the API refuses to start embedded loops when it detects Vercel.
+- **Redis** (Upstash or similar) is required for `/ready` in production and is
+  shared by the scheduler lock, log fan-out and the per-tenant limiter.
+
+Set `DB_DISABLE_POOL=true` on Vercel (one connection per request) and keep
+`EMBEDDED_WORKER=false` / `EMBEDDED_SCHEDULER=false`. Neon-style connection
+strings (`?sslmode=require&channel_binding=require`) are accepted as-is: the
+application passes the TLS options to asyncpg as connect arguments while
+Alembic keeps using them through psycopg2.
+
+The complete step-by-step guide — environment variables per platform, worker
+setup, CORS, secrets, verification commands, troubleshooting and a deployment
+checklist — is in [`docs/deployment/vercel.md`](docs/deployment/vercel.md).
