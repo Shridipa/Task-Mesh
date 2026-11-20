@@ -14,9 +14,11 @@ from httpx import ASGITransport, AsyncClient
 from support import (
     ADMIN_API_KEY,
     ADMIN_HEADERS,
+    DEVELOPER_API_KEY,
     VIEWER_API_KEY,
     VIEWER_HEADERS,
     WORKER_HEADERS,
+    WORKER_SECRET,
     bearer_headers,
     worker_headers,
 )
@@ -24,6 +26,13 @@ from support import (
 from taskmesh.api.auth import ALGORITHM, InvalidToken, decode_access_token
 from taskmesh.api.main import app
 from taskmesh.config import get_settings
+
+#: The signing secret the suite forces in ``conftest.py``.
+TEST_SIGNING_SECRET = "test-jwt-secret-not-for-production-use"
+
+#: A wrong signing key; long enough for HS256 so the check is about the
+#: signature rather than the key length.
+WRONG_SIGNING_SECRET = "wrong-signing-secret-0123456789abcdef"
 
 
 def _client() -> AsyncClient:
@@ -43,6 +52,29 @@ def _token_for(role: str, *, ttl: int = 60, issuer: str | None = None) -> str:
         "aud": settings.jwt_audience,
     }
     return jwt.encode(claims, settings.jwt_secret, algorithm=ALGORITHM)
+
+
+# ---------------------------------------------------------------------------
+# Test configuration isolation
+# ---------------------------------------------------------------------------
+def test_suite_auth_configuration_is_isolated_from_the_environment():
+    """The suite must exchange its own keys, whatever the shell or CI exports.
+
+    Regression test: ``AUTH_API_KEYS`` was inherited from the environment, so CI
+    ran with ``ci-*`` keys while the tests sent ``test-*`` keys and every token
+    exchange answered 401 on both SQLite and PostgreSQL.
+    """
+    settings = get_settings()
+
+    assert settings.environment == "test"
+    assert settings.api_keys == {
+        ADMIN_API_KEY: ("admin", "default"),
+        DEVELOPER_API_KEY: ("developer", "default"),
+        VIEWER_API_KEY: ("viewer", "default"),
+    }
+    assert settings.jwt_secret == TEST_SIGNING_SECRET
+    assert len(settings.jwt_secret.encode("utf-8")) >= 32
+    assert settings.worker_secret == WORKER_SECRET
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +192,9 @@ async def test_wrong_issuer_and_audience_are_rejected():
 @pytest.mark.asyncio
 async def test_unsigned_and_unknown_role_tokens_are_rejected():
     settings = get_settings()
-    unsigned = jwt.encode({"sub": "x", "role": "admin"}, "secret", algorithm="HS256")
+    unsigned = jwt.encode(
+        {"sub": "x", "role": "admin"}, WRONG_SIGNING_SECRET, algorithm="HS256"
+    )
     with pytest.raises(InvalidToken):
         decode_access_token(unsigned)
 

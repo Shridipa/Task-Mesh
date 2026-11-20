@@ -3,6 +3,12 @@
 Tests always run against an explicitly configured database. By default that is a
 local SQLite file; set ``TEST_DATABASE_URL`` to run the same suite against a real
 PostgreSQL instance (see ``tests/test_postgres.py`` and the README).
+
+The authentication configuration is **forced**, not defaulted: the suite must
+exchange the keys defined in ``tests/support.py``, so any ``AUTH_API_KEYS``,
+``AUTH_JWT_SECRET`` or ``WORKER_SECRET`` inherited from CI or a developer shell
+is discarded. Inheriting them previously made ``POST /auth/token`` reject the
+suite's own keys with 401 in every CI job.
 """
 
 from __future__ import annotations
@@ -11,21 +17,37 @@ import asyncio
 import os
 import sys
 
+
 # Must be set BEFORE any taskmesh/backend modules are imported so that the
 # module-level engine initialisation picks up the right URLs.
-os.environ.setdefault("ENVIRONMENT", "test")
-os.environ.setdefault(
-    "DATABASE_URL",
-    os.getenv("TEST_DATABASE_URL") or "sqlite+aiosqlite:///./test.db",
-)
+def _test_database_url() -> str:
+    """Pick the database the suite runs against, deterministically.
+
+    ``TEST_DATABASE_URL`` wins. A ``DATABASE_URL`` that points at PostgreSQL is
+    honoured too, because the README documents that as a way to run the suite
+    there. A SQLite ``DATABASE_URL`` is someone's development database and is
+    never used here, since the suite drops and recreates the schema.
+    """
+    explicit = os.getenv("TEST_DATABASE_URL")
+    if explicit:
+        return explicit
+    ambient = os.getenv("DATABASE_URL", "")
+    if ambient.startswith("postgresql"):
+        return ambient
+    return "sqlite+aiosqlite:///./test.db"
+
+
+# Test-only values. They are deliberately fixed so the suite behaves the same
+# locally and in CI, and are never valid outside the test environment.
+os.environ["ENVIRONMENT"] = "test"
+os.environ["DATABASE_URL"] = _test_database_url()
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("WORKER_SECRET", "taskmesh_secret")
-os.environ.setdefault("AUTH_JWT_SECRET", "test-jwt-secret-not-for-production-use")
-os.environ.setdefault(
-    "AUTH_API_KEYS",
+os.environ["WORKER_SECRET"] = "taskmesh_secret"
+os.environ["AUTH_JWT_SECRET"] = "test-jwt-secret-not-for-production-use"
+os.environ["AUTH_API_KEYS"] = (
     "test-admin-key:admin:default,"
     "test-developer-key:developer:default,"
-    "test-viewer-key:viewer:default",
+    "test-viewer-key:viewer:default"
 )
 
 # TaskMesh uses asyncio-only dependencies (asyncpg, FastAPI). Force asyncio.

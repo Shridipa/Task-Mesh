@@ -11,7 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Secrets used by the test suite only. They are never valid outside CI.
+  # Ambient values the test suite must ignore: `conftest.py` forces its own
+  # test-only auth configuration, so a mismatch here is a test failure, not a
+  # silently weaker or broken suite. Never valid outside CI.
   WORKER_SECRET: ci-worker-secret
   AUTH_JWT_SECRET: ci-jwt-secret-0123456789abcdef0123456789
   AUTH_API_KEYS: ci-admin-key:admin:default,ci-developer-key:developer:default,ci-viewer-key:viewer:default
